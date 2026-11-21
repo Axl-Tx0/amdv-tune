@@ -1073,7 +1073,7 @@ private fun OpenTuneTrackRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Ver letra / Buscar con IA", color = palette.textPrimary) },
+                    text = { Text("Ver letra", color = palette.textPrimary) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Filled.Mic,

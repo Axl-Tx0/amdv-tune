@@ -78,7 +78,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.AiLyricsResult
 import com.example.data.CloudinaryUploader
 import com.example.data.PlaybackState
 import com.example.data.ScannedLocalTrack
@@ -115,7 +114,6 @@ fun AdminCatalogSheet(
         customCoverUri: Uri?,
         fallbackCoverPath: String,
         selectedTracks: List<ScannedLocalTrack>,
-        autoFindLyricsWithAi: Boolean,
         onDone: (Boolean, String?) -> Unit
     ) -> Unit,
     onCreateArtist: (
@@ -143,14 +141,7 @@ fun AdminCatalogSheet(
         audioUrlInput: String,
         coverUri: Uri?,
         coverUrlInput: String,
-        autoFindLyricsWithAi: Boolean,
         onDone: (Boolean) -> Unit
-    ) -> Unit,
-    onFetchAiLyricsPreview: (
-        artistName: String,
-        songTitle: String,
-        albumTitle: String,
-        onResult: (Result<AiLyricsResult>) -> Unit
     ) -> Unit,
     onDeleteArtist: (String) -> Unit,
     onDeleteAlbum: (String) -> Unit,
@@ -189,9 +180,6 @@ fun AdminCatalogSheet(
     var trackTitle by remember { mutableStateOf("") }
     var trackNumberText by remember { mutableStateOf("1") }
     var trackLyrics by remember { mutableStateOf("") }
-    var trackAutoAiLyrics by remember { mutableStateOf(true) }
-    var isFetchingSingleAiLyrics by remember { mutableStateOf(false) }
-    var singleAiLyricsMessage by remember { mutableStateOf<String?>(null) }
     var trackAudioUri by remember { mutableStateOf<Uri?>(null) }
     var trackAudioUrl by remember { mutableStateOf("") }
     var trackCoverUri by remember { mutableStateOf<Uri?>(null) }
@@ -673,96 +661,13 @@ fun AdminCatalogSheet(
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Letra de la canción", style = MaterialTheme.typography.labelLarge)
-                                TextButton(
-                                    enabled = !isUploading && !isFetchingSingleAiLyrics && selectedTrackArtist != null && trackTitle.isNotBlank(),
-                                    onClick = {
-                                        val artistName = selectedTrackArtist?.name.orEmpty()
-                                        isFetchingSingleAiLyrics = true
-                                        singleAiLyricsMessage = null
-                                        onFetchAiLyricsPreview(
-                                            artistName,
-                                            trackTitle,
-                                            selectedTrackAlbum?.title.orEmpty()
-                                        ) { result ->
-                                            isFetchingSingleAiLyrics = false
-                                            result.onSuccess { aiRes ->
-                                                if (aiRes.found && aiRes.lyrics.isNotBlank()) {
-                                                    trackLyrics = aiRes.lyrics
-                                                    singleAiLyricsMessage = aiRes.note
-                                                } else {
-                                                    singleAiLyricsMessage = aiRes.note.ifBlank { "Letra no encontrada por la IA." }
-                                                }
-                                            }.onFailure { err ->
-                                                singleAiLyricsMessage = err.localizedMessage ?: "Error al buscar letra con IA."
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.testTag("admin_single_ai_lyrics_btn")
-                                ) {
-                                    if (isFetchingSingleAiLyrics) {
-                                        CircularProgressIndicator(
-                                            color = palette.accent,
-                                            strokeWidth = 2.dp,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Buscando…", color = palette.accent)
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Filled.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = palette.accent,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Buscar con IA", color = palette.accent)
-                                    }
-                                }
-                            }
-
-                            if (!singleAiLyricsMessage.isNullOrBlank()) {
-                                Text(
-                                    text = singleAiLyricsMessage.orEmpty(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.accent
-                                )
-                            }
-
                             OutlinedTextField(
                                 value = trackLyrics,
                                 onValueChange = { trackLyrics = it },
-                                label = { Text("Letra (opcional — la IA la busca si queda vacía)") },
+                                label = { Text("Letra de la canción (opcional)") },
                                 maxLines = 5,
                                 modifier = Modifier.fillMaxWidth()
                             )
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = "Buscar automáticamente con IA al publicar",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.textSecondary,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Switch(
-                                    checked = trackAutoAiLyrics,
-                                    onCheckedChange = { trackAutoAiLyrics = it },
-                                    enabled = !isUploading,
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = if (palette.isDark) Color.Black else Color.White,
-                                        checkedTrackColor = palette.accent
-                                    )
-                                )
-                            }
 
                             if (useDirectUrlMode) {
                                 OutlinedTextField(
@@ -808,13 +713,11 @@ fun AdminCatalogSheet(
                                         if (useDirectUrlMode) null else trackAudioUri,
                                         if (useDirectUrlMode) trackAudioUrl else "",
                                         if (useDirectUrlMode) null else trackCoverUri,
-                                        if (useDirectUrlMode) trackCoverUrl else "",
-                                        trackAutoAiLyrics
+                                        if (useDirectUrlMode) trackCoverUrl else ""
                                     ) { ok ->
                                         if (ok) {
                                             trackTitle = ""
                                             trackLyrics = ""
-                                            singleAiLyricsMessage = null
                                             trackAudioUri = null
                                             trackAudioUrl = ""
                                             trackCoverUri = null

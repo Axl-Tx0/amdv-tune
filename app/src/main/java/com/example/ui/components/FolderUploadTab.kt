@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -44,8 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,7 +85,6 @@ fun FolderUploadTabContent(
         customCoverUri: Uri?,
         fallbackCoverPath: String,
         selectedTracks: List<ScannedLocalTrack>,
-        autoFindLyricsWithAi: Boolean,
         onDone: (Boolean, String?) -> Unit
     ) -> Unit
 ) {
@@ -103,7 +99,6 @@ fun FolderUploadTabContent(
     var editableAlbum by remember { mutableStateOf("") }
     var editableYear by remember { mutableStateOf("2026") }
     var customCoverUri by remember { mutableStateOf<Uri?>(null) }
-    var autoFindLyricsWithAi by remember { mutableStateOf(true) }
     val selectedMap = remember { mutableStateMapOf<String, Boolean>() }
 
     val selectedExistingArtist = remember(artists, selectedArtistId) {
@@ -600,52 +595,6 @@ fun FolderUploadTabContent(
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = palette.surfaceElevated.copy(alpha = 0.65f),
-                border = BorderStroke(
-                    1.dp,
-                    if (autoFindLyricsWithAi) palette.accent.copy(alpha = 0.5f) else palette.border
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.AutoAwesome,
-                        contentDescription = null,
-                        tint = palette.accent,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Buscar letras automáticamente con IA",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = palette.textPrimary
-                        )
-                        Text(
-                            text = "Usa el nombre del artista y cada canción al publicar el álbum.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.textSecondary
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(
-                        checked = autoFindLyricsWithAi,
-                        onCheckedChange = { autoFindLyricsWithAi = it },
-                        enabled = !isUploading,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = if (palette.isDark) Color.Black else Color.White,
-                            checkedTrackColor = palette.accent
-                        ),
-                        modifier = Modifier.testTag("folder_auto_ai_lyrics_switch")
-                    )
-                }
-            }
-
             val resolvedArtistName = selectedExistingArtist?.name ?: editableArtist
             Button(
                 enabled = !isUploading && selectedTracks.isNotEmpty() && resolvedArtistName.isNotBlank() && editableAlbum.isNotBlank(),
@@ -659,8 +608,7 @@ fun FolderUploadTabContent(
                         year,
                         customCoverUri,
                         preview.previewCoverPath,
-                        selectedTracks,
-                        autoFindLyricsWithAi
+                        selectedTracks
                     ) { ok, savedArtistId ->
                         if (ok) {
                             customCoverUri = null

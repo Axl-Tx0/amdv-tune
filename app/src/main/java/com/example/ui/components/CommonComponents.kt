@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
@@ -39,6 +38,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.data.LrcParser
 import com.example.data.PlaybackState
 import com.example.model.AppThemeMode
 import com.example.model.TrackUiModel
@@ -665,15 +667,25 @@ fun MiniPlayerBanner(
 @Composable
 fun LyricsDetailSheet(
     track: TrackUiModel,
-    isAiLyricsLoading: Boolean = false,
-    aiLyricsError: String? = null,
+    isLyricsLoading: Boolean = false,
+    lyricsStatusMessage: String? = null,
     onDismiss: () -> Unit,
     onSaveLyrics: (String) -> Unit,
-    onFetchAiLyrics: (() -> Unit)? = null
+    onRequestAutoLyrics: (Boolean) -> Unit = {}
 ) {
     val palette = LocalAmdvPalette.current
     var isEditing by remember(track.id) { mutableStateOf(false) }
     var draftText by remember(track.id, track.lyrics) { mutableStateOf(track.lyrics) }
+    val isSynced = remember(track.lyrics) { LrcParser.hasSyncedTimestamps(track.lyrics) }
+    val displayLyrics = remember(track.lyrics) {
+        LrcParser.stripTimestamps(track.lyrics).ifBlank { track.lyrics }
+    }
+
+    LaunchedEffect(track.id) {
+        if (track.lyrics.isBlank() && !isLyricsLoading) {
+            onRequestAutoLyrics(false)
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -729,17 +741,37 @@ fun LyricsDetailSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = stringResource(R.string.lyrics_sheet_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = palette.accent
-                )
-                if (onFetchAiLyrics != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.lyrics_sheet_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.accent
+                    )
+                    if (isSynced && !isEditing) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = palette.accent.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f))
+                        ) {
+                            Text(
+                                text = "Sincronizada • LRCLIB",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.accent,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                if (!isEditing) {
                     TextButton(
-                        enabled = !isAiLyricsLoading,
-                        onClick = onFetchAiLyrics
+                        onClick = { onRequestAutoLyrics(true) },
+                        enabled = !isLyricsLoading,
+                        modifier = Modifier.testTag("sheet_fetch_lrclib_btn")
                     ) {
-                        if (isAiLyricsLoading) {
+                        if (isLyricsLoading) {
                             CircularProgressIndicator(
                                 color = palette.accent,
                                 strokeWidth = 2.dp,
@@ -749,25 +781,16 @@ fun LyricsDetailSheet(
                             Text("Buscando…", color = palette.accent)
                         } else {
                             Icon(
-                                imageVector = Icons.Filled.AutoAwesome,
-                                contentDescription = null,
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "Buscar letra en LRCLIB",
                                 tint = palette.accent,
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Buscar con IA", color = palette.accent)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("LRCLIB", color = palette.accent)
                         }
                     }
                 }
-            }
-
-            if (!aiLyricsError.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = aiLyricsError,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.secondaryAccent
-                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -787,12 +810,37 @@ fun LyricsDetailSheet(
                     border = BorderStroke(1.dp, palette.border),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = track.lyrics.ifBlank { "Sin letra registrada para este tema. Toca \"Buscar con IA\" para encontrarla." },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = palette.textPrimary,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    if (isLyricsLoading && displayLyrics.isBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                color = palette.accent,
+                                strokeWidth = 2.5.dp,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Buscando letra en LRCLIB…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.textSecondary
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = displayLyrics.ifBlank {
+                                lyricsStatusMessage
+                                    ?: "Sin letra registrada para este tema. Toca \"LRCLIB\" para buscarla o \"Editar\" para agregarla."
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = palette.textPrimary,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))

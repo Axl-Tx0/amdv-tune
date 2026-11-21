@@ -120,45 +120,33 @@ fun HomeScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.brand_subtitle_neon),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = palette.textSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (isAdmin) {
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = palette.accent.copy(alpha = 0.16f),
-                                    border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.7f)),
-                                    modifier = Modifier.testTag("home_admin_badge")
+                        if (isAdmin) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = palette.accent.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.7f)),
+                                modifier = Modifier.testTag("home_admin_badge")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.AdminPanelSettings,
-                                            contentDescription = stringResource(R.string.role_admin_badge),
-                                            tint = palette.accent,
-                                            modifier = Modifier.size(12.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Text(
-                                            text = stringResource(R.string.role_admin_badge),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent,
-                                            maxLines = 1,
-                                            softWrap = false
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Filled.AdminPanelSettings,
+                                        contentDescription = stringResource(R.string.role_admin_badge),
+                                        tint = palette.accent,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = stringResource(R.string.role_admin_badge),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.accent,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
                                 }
                             }
                         }

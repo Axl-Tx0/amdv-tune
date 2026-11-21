@@ -328,7 +328,6 @@ class CatalogRepository(
         audioUrlInput: String = "",
         customCoverUri: Uri? = null,
         customCoverUrlInput: String = "",
-        autoFindLyricsWithAi: Boolean = true,
         onProgress: (Float) -> Unit = {}
     ): Result<CatalogTrack> {
         val trackId = safeId("trk")
@@ -371,20 +370,7 @@ class CatalogRepository(
             val safeAlbumId = album?.id.orEmpty()
             val safeAlbumTitle = album?.title?.take(120).orEmpty()
             val safeTrackNumber = trackNumber.coerceIn(1L, 999L)
-            var safeLyrics = lyrics.trim().take(5000)
-            if (safeLyrics.isBlank() && autoFindLyricsWithAi) {
-                onProgress(0.12f)
-                val aiRes = AiLyricsService.findLyrics(
-                    artistName = safeArtistName,
-                    songTitle = safeTitle,
-                    albumTitle = safeAlbumTitle
-                )
-                aiRes.onSuccess { res ->
-                    if (res.found && res.lyrics.isNotBlank()) {
-                        safeLyrics = res.lyrics.take(5000)
-                    }
-                }
-            }
+            val manualLyrics = LrcParser.trimToMaxChars(lyrics, 5000)
 
             val audioUrl: String
             val safeDuration: Long
@@ -425,6 +411,19 @@ class CatalogRepository(
                 !album?.coverUrl.isNullOrBlank() -> album?.coverUrl.orEmpty()
                 else -> artist.photoUrl
             }.take(1500)
+
+            val safeLyrics = if (manualLyrics.isNotBlank()) {
+                manualLyrics
+            } else {
+                withTimeoutOrNull(5_500L) {
+                    LrcLibService.fetchLyrics(
+                        title = safeTitle,
+                        artist = safeArtistName,
+                        album = safeAlbumTitle,
+                        durationSec = safeDuration
+                    ).getOrNull()?.lyrics.orEmpty()
+                }.orEmpty().let { LrcParser.trimToMaxChars(it, 5000) }
+            }
 
             val payload = mapOf(
                 "userId" to uid,
@@ -472,9 +471,7 @@ class CatalogRepository(
     data class FolderUploadSummary(
         val artistId: String,
         val artistName: String,
-        val uploadedCount: Int,
-        val lyricsFoundCount: Int,
-        val aiErrorNote: String? = null
+        val uploadedCount: Int
     )
 
     suspend fun uploadFolderAlbum(
@@ -487,7 +484,6 @@ class CatalogRepository(
         customCoverUri: Uri?,
         fallbackCoverPath: String,
         tracks: List<ScannedLocalTrack>,
-        autoFindLyricsWithAi: Boolean = true,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): Result<FolderUploadSummary> {
         return try {
@@ -598,8 +594,6 @@ class CatalogRepository(
 
             val total = tracks.size
             var uploaded = 0
-            var lyricsFoundCount = 0
-            var lastAiError: String? = null
             tracks.forEachIndexed { idx, item ->
                 val baseProgress = 0.14f + (idx.toFloat() / total.toFloat()) * 0.84f
                 val stepSpan = 0.84f / total.toFloat()
@@ -638,26 +632,19 @@ class CatalogRepository(
                 }.take(1500)
 
                 val cleanTrackTitle = item.title.trim().ifBlank { "Pista ${idx + 1}" }.take(120)
-                val trackArtistQuery = item.artistName.trim().ifBlank { safeArtistName }
-                var trackLyrics = ""
-                if (autoFindLyricsWithAi) {
-                    onProgress(
-                        baseProgress + stepSpan * 0.82f,
-                        "IA buscando letra ${idx + 1}/$total: $cleanTrackTitle…"
-                    )
-                    AiLyricsService.findLyrics(
-                        artistName = trackArtistQuery,
-                        songTitle = cleanTrackTitle,
-                        albumTitle = safeAlbumTitle
-                    ).onSuccess { res ->
-                        if (res.found && res.lyrics.isNotBlank()) {
-                            trackLyrics = res.lyrics.take(5000)
-                            lyricsFoundCount++
-                        }
-                    }.onFailure { err ->
-                        lastAiError = err.localizedMessage
-                    }
-                }
+                val safeTrackDuration = item.durationSec.coerceIn(0L, 86400L)
+                onProgress(
+                    baseProgress + stepSpan * 0.85f,
+                    "Buscando letra (${idx + 1}/$total): $cleanTrackTitle"
+                )
+                val autoLyrics = withTimeoutOrNull(4_500L) {
+                    LrcLibService.fetchLyrics(
+                        title = cleanTrackTitle,
+                        artist = safeArtistName,
+                        album = safeAlbumTitle,
+                        durationSec = safeTrackDuration
+                    ).getOrNull()?.lyrics.orEmpty()
+                }.orEmpty().let { LrcParser.trimToMaxChars(it, 5000) }
 
                 val trackPayload = mapOf(
                     "userId" to uid,
@@ -666,11 +653,11 @@ class CatalogRepository(
                     "albumId" to albumId,
                     "albumTitle" to safeAlbumTitle,
                     "title" to cleanTrackTitle,
-                    "durationSec" to item.durationSec.coerceIn(0L, 86400L),
+                    "durationSec" to safeTrackDuration,
                     "trackNumber" to (idx + 1L).coerceIn(1L, 999L),
                     "audioUrl" to audioUrl.take(1500),
                     "coverUrl" to trackCoverUrl,
-                    "lyrics" to trackLyrics,
+                    "lyrics" to autoLyrics,
                     "published" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -679,19 +666,13 @@ class CatalogRepository(
                 uploaded++
             }
 
-            val summaryNote = if (autoFindLyricsWithAi) {
-                "Álbum publicado en $safeArtistName ($uploaded canciones • $lyricsFoundCount letras con IA)"
-            } else {
-                "Álbum publicado en $safeArtistName ($uploaded canciones)"
-            }
+            val summaryNote = "Álbum publicado en $safeArtistName ($uploaded canciones)"
             onProgress(1f, summaryNote)
             Result.success(
                 FolderUploadSummary(
                     artistId = artistId,
                     artistName = safeArtistName,
-                    uploadedCount = uploaded,
-                    lyricsFoundCount = lyricsFoundCount,
-                    aiErrorNote = if (autoFindLyricsWithAi && lyricsFoundCount == 0) lastAiError else null
+                    uploadedCount = uploaded
                 )
             )
         } catch (e: CancellationException) {

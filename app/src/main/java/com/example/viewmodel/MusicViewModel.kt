@@ -4,14 +4,15 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.AiLyricsResult
-import com.example.data.AiLyricsService
 import com.example.data.AppDatabase
 import com.example.data.AudioPickerHelper
 import com.example.data.CatalogRepository
 import com.example.data.CloudSyncRepository
 import com.example.data.DeviceMusicSyncHelper
 import com.example.data.LocalFolderScanner
+import com.example.data.LrcLibService
+import com.example.data.LrcLyricsCache
+import com.example.data.LrcParser
 import com.example.data.MusicPlayerController
 import com.example.data.OfflineDownloadManager
 import com.example.data.PlaybackState
@@ -29,6 +30,7 @@ import com.example.model.LocalTrackEntity
 import com.example.model.TrackUiModel
 import com.example.model.toOfflineUiModel
 import com.example.model.toUiModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,20 +38,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+
+data class LyricsLookupUiState(
+    val loadingTrackId: String? = null,
+    val statusTrackId: String? = null,
+    val statusMessage: String? = null
+)
 
 data class FolderImportUiState(
     val isScanning: Boolean = false,
     val preview: ScannedFolderAlbum? = null,
     val statusMessage: String? = null,
-    val errorMessage: String? = null
-)
-
-data class AiLyricsUiState(
-    val isLoading: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -117,6 +123,7 @@ class MusicViewModel(
     private val trackDao = database.trackDao()
     private val downloadedDao = database.downloadedTrackDao()
     private val offlineManager = OfflineDownloadManager(appContext, downloadedDao)
+    private val lyricsCache = LrcLyricsCache(appContext)
 
     private val _searchQuery = MutableStateFlow("")
     private val _syncMessage = MutableStateFlow<String?>(null)
@@ -125,11 +132,15 @@ class MusicViewModel(
     private val _catalogUploadProgress = MutableStateFlow(0f)
     private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     private val _catalogSnapshot = MutableStateFlow(CatalogSnapshot())
+    private val _cachedLyrics = MutableStateFlow<Map<String, String>>(emptyMap())
     private val _folderImportState = MutableStateFlow(FolderImportUiState())
     val folderImportState: StateFlow<FolderImportUiState> = _folderImportState.asStateFlow()
 
-    private val _aiLyricsState = MutableStateFlow(AiLyricsUiState())
-    val aiLyricsState: StateFlow<AiLyricsUiState> = _aiLyricsState.asStateFlow()
+    private val _lyricsLookupState = MutableStateFlow(LyricsLookupUiState())
+    val lyricsLookupState: StateFlow<LyricsLookupUiState> = _lyricsLookupState.asStateFlow()
+
+    private val attemptedAutoLyricsIds = mutableSetOf<String>()
+    private val inFlightLyricsIds = mutableSetOf<String>()
 
     private var cloudSyncRepository: CloudSyncRepository? = null
     private var catalogRepository: CatalogRepository? = null
@@ -164,9 +175,10 @@ class MusicViewModel(
         trackDao.observeActiveTracks(),
         downloadedDao.observeDownloadedTracks(),
         _catalogSnapshot,
+        _cachedLyrics,
         uiMetaFlow
-    ) { localEntities, downloadedEntities, catalog, meta ->
-        buildAppUiState(localEntities, downloadedEntities, catalog, meta)
+    ) { localEntities, downloadedEntities, catalog, cachedLyrics, meta ->
+        buildAppUiState(localEntities, downloadedEntities, catalog, cachedLyrics, meta)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000L),
@@ -180,6 +192,12 @@ class MusicViewModel(
             }
         }
         viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) { lyricsCache.loadAll() }
+            if (loaded.isNotEmpty()) {
+                _cachedLyrics.update { loaded + it }
+            }
+        }
+        viewModelScope.launch {
             themeRepo.autoContinueFlow.collect { enabled ->
                 playerController.setAutoContinueEnabled(enabled)
             }
@@ -189,15 +207,30 @@ class MusicViewModel(
                 playerController.setMuteOnNotificationsEnabled(enabled)
             }
         }
+        viewModelScope.launch {
+            playerController.playbackState
+                .map { it.currentTrack }
+                .distinctUntilChangedBy { it?.id }
+                .collect { track ->
+                    if (track != null && track.lyrics.isBlank()) {
+                        fetchLyricsFromLrcLib(track, forceRefresh = false)
+                    }
+                }
+        }
     }
 
     private fun buildAppUiState(
         localEntities: List<LocalTrackEntity>,
         downloadedEntities: List<DownloadedTrackEntity>,
         catalog: CatalogSnapshot,
+        cachedLyrics: Map<String, String>,
         meta: UiMeta
     ): AppUiState {
-        val localUi = localEntities.map { it.toUiModel() }
+        val localUi = localEntities.map { entity ->
+            val model = entity.toUiModel()
+            val resolvedLyrics = model.lyrics.ifBlank { cachedLyrics[model.id].orEmpty() }
+            if (resolvedLyrics != model.lyrics) model.copy(lyrics = resolvedLyrics) else model
+        }
         val downloadedById = downloadedEntities.associateBy { it.trackId }
 
         val cloudUi = catalog.tracks.map { ct ->
@@ -211,6 +244,9 @@ class MusicViewModel(
                 ct.coverUrl.isNotBlank() -> ct.coverUrl
                 else -> fallbackMonogram
             }
+            val resolvedLyrics = ct.lyrics
+                .ifBlank { downloaded?.lyrics.orEmpty() }
+                .ifBlank { cachedLyrics[ct.id].orEmpty() }
             TrackUiModel(
                 id = ct.id,
                 title = ct.title,
@@ -220,7 +256,7 @@ class MusicViewModel(
                 audioUri = ct.audioUrl,
                 coverKey = cover,
                 favorite = isFav,
-                lyrics = ct.lyrics,
+                lyrics = resolvedLyrics,
                 albumTitle = ct.albumTitle,
                 artistId = ct.artistId,
                 albumId = ct.albumId,
@@ -237,7 +273,9 @@ class MusicViewModel(
             .filter { File(it.localAudioPath).exists() && !cloudIds.contains(it.trackId) }
             .map { dl ->
                 val isFav = catalog.cloudFavoriteIds.contains(dl.trackId) || dl.favorite
-                dl.toOfflineUiModel(isFav)
+                val model = dl.toOfflineUiModel(isFav)
+                val resolvedLyrics = model.lyrics.ifBlank { cachedLyrics[model.id].orEmpty() }
+                if (resolvedLyrics != model.lyrics) model.copy(lyrics = resolvedLyrics) else model
             }
 
         val offlineUi = cloudUi.filter { it.isDownloaded } + offlineOnlyUi
@@ -448,75 +486,125 @@ class MusicViewModel(
     }
 
     fun updateLyrics(track: TrackUiModel, newLyrics: String) {
-        val cleaned = newLyrics.trim().take(5000)
+        val cleaned = LrcParser.trimToMaxChars(newLyrics, 5000)
         viewModelScope.launch {
-            if (track.isCloudCatalog) {
-                downloadedDao.updateLyrics(track.id, cleaned)
-                val repo = catalogRepository
-                if (isAdminSession && repo != null) {
-                    repo.updateCatalogTrackLyrics(track.id, cleaned)
-                        .onFailure { err ->
-                            _syncMessage.value = "No se pudo guardar la letra en la nube: ${err.localizedMessage ?: "error"}"
-                        }
-                } else {
-                    // Actualizar también en memoria para la sesión actual del oyente
-                    _catalogSnapshot.update { snap ->
-                        snap.copy(tracks = snap.tracks.map { ct ->
-                            if (ct.id == track.id) ct.copy(lyrics = cleaned) else ct
-                        })
-                    }
-                }
-            } else {
-                trackDao.updateLyrics(track.id, cleaned)
-            }
+            persistLyricsForTrack(track = track, lyrics = cleaned, showCloudError = true)
         }
     }
 
-    fun fetchLyricsWithAiForTrack(track: TrackUiModel) {
-        if (_aiLyricsState.value.isLoading) return
+    fun fetchLyricsFromLrcLib(track: TrackUiModel, forceRefresh: Boolean = false) {
+        val trackId = track.id
+        if (!forceRefresh) {
+            if (track.lyrics.isNotBlank() || !_cachedLyrics.value[trackId].isNullOrBlank()) return
+            if (attemptedAutoLyricsIds.contains(trackId)) return
+        }
+        if (inFlightLyricsIds.contains(trackId)) return
+
+        attemptedAutoLyricsIds.add(trackId)
+        inFlightLyricsIds.add(trackId)
+
         viewModelScope.launch {
-            _aiLyricsState.value = AiLyricsUiState(isLoading = true, errorMessage = null)
-            val result = AiLyricsService.findLyrics(
-                artistName = track.artist,
-                songTitle = track.title,
-                albumTitle = track.albumTitle
+            _lyricsLookupState.value = LyricsLookupUiState(
+                loadingTrackId = trackId,
+                statusTrackId = null,
+                statusMessage = null
             )
-            result.onSuccess { aiRes ->
-                if (aiRes.found && aiRes.lyrics.isNotBlank()) {
-                    _aiLyricsState.value = AiLyricsUiState(isLoading = false, errorMessage = null)
-                    updateLyrics(track, aiRes.lyrics)
-                    _syncMessage.value = "Letra encontrada con IA para \"${track.title}\""
+            try {
+                val realDurationSec = if (
+                    playbackState.value.currentTrack?.id == trackId &&
+                    playbackState.value.durationMs > 1000L
+                ) {
+                    playbackState.value.durationMs / 1000L
                 } else {
-                    _aiLyricsState.value = AiLyricsUiState(
-                        isLoading = false,
-                        errorMessage = aiRes.note.ifBlank { "La IA no encontró la letra para esta canción." }
+                    track.durationSec
+                }
+
+                val result = LrcLibService.fetchLyrics(
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.albumTitle,
+                    durationSec = realDurationSec
+                )
+
+                result.onSuccess { match ->
+                    when {
+                        match != null && match.lyrics.isNotBlank() -> {
+                            persistLyricsForTrack(
+                                track = track,
+                                lyrics = match.lyrics,
+                                showCloudError = false
+                            )
+                            _lyricsLookupState.value = LyricsLookupUiState(
+                                loadingTrackId = null,
+                                statusTrackId = trackId,
+                                statusMessage = if (forceRefresh) {
+                                    if (match.isSynced) "Letra sincronizada cargada desde LRCLIB"
+                                    else "Letra cargada desde LRCLIB"
+                                } else null
+                            )
+                        }
+                        match?.isInstrumental == true -> {
+                            _lyricsLookupState.value = LyricsLookupUiState(
+                                loadingTrackId = null,
+                                statusTrackId = trackId,
+                                statusMessage = "Esta pista está marcada como instrumental en LRCLIB."
+                            )
+                        }
+                        else -> {
+                            _lyricsLookupState.value = LyricsLookupUiState(
+                                loadingTrackId = null,
+                                statusTrackId = trackId,
+                                statusMessage = "No se encontró letra en LRCLIB para esta canción."
+                            )
+                        }
+                    }
+                }.onFailure { err ->
+                    _lyricsLookupState.value = LyricsLookupUiState(
+                        loadingTrackId = null,
+                        statusTrackId = trackId,
+                        statusMessage = err.localizedMessage ?: "No se pudo consultar LRCLIB."
                     )
                 }
-            }.onFailure { err ->
-                val msg = err.localizedMessage ?: "No se pudo buscar la letra con IA."
-                _aiLyricsState.value = AiLyricsUiState(isLoading = false, errorMessage = msg)
+            } finally {
+                inFlightLyricsIds.remove(trackId)
+                if (_lyricsLookupState.value.loadingTrackId == trackId) {
+                    _lyricsLookupState.update { it.copy(loadingTrackId = null) }
+                }
             }
         }
     }
 
-    fun fetchLyricsPreviewWithAi(
-        artistName: String,
-        songTitle: String,
-        albumTitle: String = "",
-        onResult: (Result<AiLyricsResult>) -> Unit
+    private suspend fun persistLyricsForTrack(
+        track: TrackUiModel,
+        lyrics: String,
+        showCloudError: Boolean
     ) {
-        viewModelScope.launch {
-            val result = AiLyricsService.findLyrics(
-                artistName = artistName,
-                songTitle = songTitle,
-                albumTitle = albumTitle
-            )
-            onResult(result)
+        withContext(Dispatchers.IO) {
+            lyricsCache.save(track.id, lyrics)
         }
-    }
+        _cachedLyrics.update { current ->
+            if (lyrics.isBlank()) current - track.id else current + (track.id to lyrics)
+        }
 
-    fun clearAiLyricsError() {
-        _aiLyricsState.update { it.copy(errorMessage = null) }
+        if (track.isCloudCatalog) {
+            downloadedDao.updateLyrics(track.id, lyrics)
+            val repo = catalogRepository
+            if (isAdminSession && repo != null) {
+                repo.updateCatalogTrackLyrics(track.id, lyrics)
+                    .onFailure { err ->
+                        if (showCloudError) {
+                            _syncMessage.value = "No se pudo guardar la letra en la nube: ${err.localizedMessage ?: "error"}"
+                        }
+                    }
+            }
+            _catalogSnapshot.update { snap ->
+                snap.copy(tracks = snap.tracks.map { ct ->
+                    if (ct.id == track.id) ct.copy(lyrics = lyrics) else ct
+                })
+            }
+        } else {
+            trackDao.updateLyrics(track.id, lyrics)
+        }
     }
 
     fun deleteTrack(track: TrackUiModel) {
@@ -744,7 +832,6 @@ class MusicViewModel(
         audioUrlInput: String = "",
         customCoverUri: Uri? = null,
         customCoverUrlInput: String = "",
-        autoFindLyricsWithAi: Boolean = true,
         onDone: (Boolean) -> Unit
     ) {
         val repo = catalogRepository
@@ -765,8 +852,7 @@ class MusicViewModel(
                 audioUri = audioUri,
                 audioUrlInput = audioUrlInput,
                 customCoverUri = customCoverUri,
-                customCoverUrlInput = customCoverUrlInput,
-                autoFindLyricsWithAi = autoFindLyricsWithAi
+                customCoverUrlInput = customCoverUrlInput
             ) { p ->
                 _catalogUploadProgress.value = p
             }
@@ -839,7 +925,6 @@ class MusicViewModel(
         customCoverUri: Uri?,
         fallbackCoverPath: String,
         selectedTracks: List<ScannedLocalTrack>,
-        autoFindLyricsWithAi: Boolean = true,
         onDone: (Boolean, String?) -> Unit
     ) {
         val repo = catalogRepository
@@ -860,8 +945,7 @@ class MusicViewModel(
                 releaseYear = releaseYear,
                 customCoverUri = customCoverUri,
                 fallbackCoverPath = fallbackCoverPath,
-                tracks = selectedTracks,
-                autoFindLyricsWithAi = autoFindLyricsWithAi
+                tracks = selectedTracks
             ) { progress, status ->
                 _catalogUploadProgress.value = progress
                 _folderImportState.update { it.copy(statusMessage = status, errorMessage = null) }
@@ -869,16 +953,7 @@ class MusicViewModel(
             _isCatalogUploading.value = false
             res.onSuccess { summary ->
                 _folderImportState.value = FolderImportUiState()
-                _syncMessage.value = buildString {
-                    append("Álbum publicado en ${summary.artistName} (${summary.uploadedCount} canciones")
-                    if (autoFindLyricsWithAi) {
-                        append(" • ${summary.lyricsFoundCount} letras con IA")
-                        if (!summary.aiErrorNote.isNullOrBlank()) {
-                            append(" • ${summary.aiErrorNote}")
-                        }
-                    }
-                    append(")")
-                }
+                _syncMessage.value = "Álbum publicado en ${summary.artistName} (${summary.uploadedCount} canciones)"
                 onDone(true, summary.artistId)
             }.onFailure { err ->
                 _folderImportState.update { it.copy(errorMessage = err.localizedMessage) }

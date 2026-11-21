@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -32,12 +33,14 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
@@ -51,6 +54,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
@@ -62,6 +66,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -92,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.LrcParser
 import com.example.data.PlaybackState
 import com.example.model.TrackUiModel
 import com.example.ui.theme.HeartPink
@@ -102,8 +108,8 @@ import com.example.ui.theme.OrbitronFontFamily
 fun FullScreenPlayerOverlay(
     visible: Boolean,
     playbackState: PlaybackState,
-    isAiLyricsLoading: Boolean,
-    aiLyricsError: String?,
+    isLyricsLoading: Boolean = false,
+    lyricsStatusMessage: String? = null,
     onCollapse: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -115,8 +121,8 @@ fun FullScreenPlayerOverlay(
     onToggleFavorite: (TrackUiModel) -> Unit,
     onDownloadTrack: (String) -> Unit,
     onRemoveDownload: (String) -> Unit,
-    onFetchAiLyrics: (TrackUiModel) -> Unit,
-    onEditLyrics: (TrackUiModel) -> Unit
+    onEditLyrics: (TrackUiModel) -> Unit,
+    onRequestAutoLyrics: (TrackUiModel, Boolean) -> Unit = { _, _ -> }
 ) {
     val track = playbackState.currentTrack
 
@@ -139,8 +145,8 @@ fun FullScreenPlayerOverlay(
             FullScreenPlayerContent(
                 track = track,
                 playbackState = playbackState,
-                isAiLyricsLoading = isAiLyricsLoading,
-                aiLyricsError = aiLyricsError,
+                isLyricsLoading = isLyricsLoading,
+                lyricsStatusMessage = lyricsStatusMessage,
                 onCollapse = onCollapse,
                 onPlayPause = onPlayPause,
                 onNext = onNext,
@@ -152,8 +158,8 @@ fun FullScreenPlayerOverlay(
                 onToggleFavorite = { onToggleFavorite(track) },
                 onDownloadTrack = { onDownloadTrack(track.id) },
                 onRemoveDownload = { onRemoveDownload(track.id) },
-                onFetchAiLyrics = { onFetchAiLyrics(track) },
-                onEditLyrics = { onEditLyrics(track) }
+                onEditLyrics = { onEditLyrics(track) },
+                onRequestAutoLyrics = { force -> onRequestAutoLyrics(track, force) }
             )
         }
     }
@@ -163,8 +169,8 @@ fun FullScreenPlayerOverlay(
 private fun FullScreenPlayerContent(
     track: TrackUiModel,
     playbackState: PlaybackState,
-    isAiLyricsLoading: Boolean,
-    aiLyricsError: String?,
+    isLyricsLoading: Boolean,
+    lyricsStatusMessage: String?,
     onCollapse: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -176,8 +182,8 @@ private fun FullScreenPlayerContent(
     onToggleFavorite: () -> Unit,
     onDownloadTrack: () -> Unit,
     onRemoveDownload: () -> Unit,
-    onFetchAiLyrics: () -> Unit,
-    onEditLyrics: () -> Unit
+    onEditLyrics: () -> Unit,
+    onRequestAutoLyrics: (Boolean) -> Unit
 ) {
     val palette = LocalAmdvPalette.current
     var showLyricsView by remember(track.id) { mutableStateOf(false) }
@@ -193,6 +199,12 @@ private fun FullScreenPlayerContent(
     LaunchedEffect(track.id) {
         isDragging = false
         dragFraction = 0f
+    }
+
+    LaunchedEffect(showLyricsView, track.id) {
+        if (showLyricsView && track.lyrics.isBlank() && !isLyricsLoading) {
+            onRequestAutoLyrics(false)
+        }
     }
 
     val artScale by animateFloatAsState(
@@ -397,7 +409,22 @@ private fun FullScreenPlayerContent(
                                 }
                             }
                         } else {
-                            // Full Lyrics Panel inside Full-Screen Player
+                            // Full Lyrics Panel inside Full-Screen Player (LRCLIB synced karaoke + plain fallback)
+                            val syncedLines = remember(track.lyrics) {
+                                LrcParser.parseSyncedLyrics(track.lyrics)
+                            }
+                            val activeLineIndex = remember(syncedLines, displayedPositionMs) {
+                                LrcParser.findActiveLineIndex(syncedLines, displayedPositionMs)
+                            }
+                            val lyricsListState = rememberLazyListState()
+
+                            LaunchedEffect(activeLineIndex, track.id, syncedLines.size) {
+                                if (syncedLines.isNotEmpty() && activeLineIndex >= 0) {
+                                    val targetIndex = (activeLineIndex - 2).coerceAtLeast(0)
+                                    lyricsListState.animateScrollToItem(targetIndex)
+                                }
+                            }
+
                             Surface(
                                 shape = RoundedCornerShape(22.dp),
                                 color = palette.surface.copy(alpha = 0.92f),
@@ -409,35 +436,64 @@ private fun FullScreenPlayerContent(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .padding(18.dp)
+                                        .padding(horizontal = 18.dp, vertical = 14.dp)
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            text = "LETRA",
-                                            fontFamily = OrbitronFontFamily,
-                                            fontSize = 12.sp,
-                                            letterSpacing = 1.4.sp,
-                                            color = palette.accent,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "LETRA",
+                                                fontFamily = OrbitronFontFamily,
+                                                fontSize = 12.sp,
+                                                letterSpacing = 1.4.sp,
+                                                color = palette.accent,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (syncedLines.isNotEmpty()) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = palette.accent.copy(alpha = 0.14f),
+                                                    border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f))
+                                                ) {
+                                                    Text(
+                                                        text = "SINCRONIZADA",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = palette.accent,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            TextButton(
-                                                enabled = !isAiLyricsLoading,
-                                                onClick = onFetchAiLyrics,
-                                                modifier = Modifier.testTag("player_ai_lyrics_btn")
+                                            IconButton(
+                                                onClick = { onRequestAutoLyrics(true) },
+                                                enabled = !isLyricsLoading,
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("player_refresh_lrclib_btn")
                                             ) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.AutoAwesome,
-                                                    contentDescription = null,
-                                                    tint = palette.accent,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Buscar con IA", color = palette.accent)
+                                                if (isLyricsLoading) {
+                                                    CircularProgressIndicator(
+                                                        color = palette.accent,
+                                                        strokeWidth = 2.dp,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Refresh,
+                                                        contentDescription = "Buscar letra en LRCLIB",
+                                                        tint = palette.accent,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
                                             }
                                             IconButton(
                                                 onClick = onEditLyrics,
@@ -453,84 +509,157 @@ private fun FullScreenPlayerContent(
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
 
-                                    if (isAiLyricsLoading) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier.fillMaxSize()
-                                        ) {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                CircularProgressIndicator(
-                                                    color = palette.accent,
-                                                    modifier = Modifier.size(34.dp)
-                                                )
-                                                Spacer(modifier = Modifier.height(12.dp))
-                                                Text(
-                                                    text = "Buscando letra con IA para\n\"${track.title}\"…",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = palette.textSecondary,
-                                                    textAlign = TextAlign.Center
-                                                )
+                                    when {
+                                        isLyricsLoading && track.lyrics.isBlank() -> {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier.fillMaxSize()
+                                            ) {
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        color = palette.accent,
+                                                        strokeWidth = 2.8.dp,
+                                                        modifier = Modifier.size(34.dp)
+                                                    )
+                                                    Text(
+                                                        text = "Buscando letra en LRCLIB…",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = palette.textSecondary,
+                                                        textAlign = TextAlign.Center
+                                                    )
+                                                }
                                             }
                                         }
-                                    } else if (track.lyrics.isNotBlank()) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .verticalScroll(rememberScrollState())
-                                        ) {
-                                            if (!aiLyricsError.isNullOrBlank()) {
-                                                Text(
-                                                    text = aiLyricsError,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = palette.secondaryAccent,
-                                                    modifier = Modifier.padding(bottom = 8.dp)
-                                                )
+
+                                        syncedLines.isNotEmpty() -> {
+                                            LazyColumn(
+                                                state = lyricsListState,
+                                                contentPadding = PaddingValues(top = 18.dp, bottom = 48.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .testTag("player_synced_lyrics_list")
+                                            ) {
+                                                itemsIndexed(syncedLines) { index, line ->
+                                                    val isActive = index == activeLineIndex
+                                                    val isPast = activeLineIndex >= 0 && index < activeLineIndex
+                                                    val lineBg = if (isActive) {
+                                                        palette.accent.copy(alpha = if (palette.isDark) 0.16f else 0.12f)
+                                                    } else {
+                                                        Color.Transparent
+                                                    }
+                                                    val lineTextColor = when {
+                                                        isActive -> if (palette.isDark) palette.textPrimary else palette.accent
+                                                        isPast -> palette.textSecondary.copy(alpha = 0.45f)
+                                                        else -> palette.textPrimary.copy(alpha = 0.72f)
+                                                    }
+
+                                                    Surface(
+                                                        shape = RoundedCornerShape(14.dp),
+                                                        color = lineBg,
+                                                        border = if (isActive) {
+                                                            BorderStroke(1.dp, palette.accent.copy(alpha = 0.4f))
+                                                        } else null,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clip(RoundedCornerShape(14.dp))
+                                                            .clickable { onSeekTo(line.timeMs) }
+                                                    ) {
+                                                        Text(
+                                                            text = line.text,
+                                                            style = MaterialTheme.typography.bodyLarge.copy(
+                                                                fontSize = if (isActive) 20.sp else 16.sp,
+                                                                lineHeight = if (isActive) 28.sp else 23.sp,
+                                                                fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium
+                                                            ),
+                                                            color = lineTextColor,
+                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                                        )
+                                                    }
+                                                }
                                             }
-                                            Text(
-                                                text = track.lyrics,
-                                                style = MaterialTheme.typography.bodyLarge.copy(
-                                                    lineHeight = 27.sp
-                                                ),
-                                                color = palette.textPrimary
-                                            )
                                         }
-                                    } else {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier.fillMaxSize()
-                                        ) {
+
+                                        track.lyrics.isNotBlank() -> {
+                                            val plainText = remember(track.lyrics) {
+                                                LrcParser.stripTimestamps(track.lyrics).ifBlank { track.lyrics }
+                                            }
                                             Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .verticalScroll(rememberScrollState())
                                             ) {
                                                 Text(
-                                                    text = aiLyricsError
-                                                        ?: "Esta canción aún no tiene letra guardada.",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = if (!aiLyricsError.isNullOrBlank()) palette.secondaryAccent else palette.textSecondary,
-                                                    textAlign = TextAlign.Center
-                                                )
-                                                Button(
-                                                    onClick = onFetchAiLyrics,
-                                                    colors = ButtonDefaults.buttonColors(
-                                                        containerColor = palette.accent,
-                                                        contentColor = if (palette.isDark) Color.Black else Color.White
+                                                    text = plainText,
+                                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                                        lineHeight = 27.sp
                                                     ),
-                                                    shape = RoundedCornerShape(24.dp),
-                                                    modifier = Modifier.height(48.dp)
+                                                    color = palette.textPrimary
+                                                )
+                                            }
+                                        }
+
+                                        else -> {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier.fillMaxSize()
+                                            ) {
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                                 ) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.AutoAwesome,
-                                                        contentDescription = null,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
                                                     Text(
-                                                        text = "Buscar letra con IA",
-                                                        fontWeight = FontWeight.Bold
+                                                        text = lyricsStatusMessage
+                                                            ?: "Esta canción aún no tiene letra guardada.",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = palette.textSecondary,
+                                                        textAlign = TextAlign.Center
                                                     )
+                                                    Button(
+                                                        onClick = { onRequestAutoLyrics(true) },
+                                                        colors = ButtonDefaults.buttonColors(
+                                                            containerColor = palette.accent,
+                                                            contentColor = if (palette.isDark) Color.Black else Color.White
+                                                        ),
+                                                        shape = RoundedCornerShape(24.dp),
+                                                        modifier = Modifier
+                                                            .height(48.dp)
+                                                            .testTag("player_fetch_lrclib_btn")
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.Refresh,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Text(
+                                                            text = "Buscar en LRCLIB",
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                    OutlinedButton(
+                                                        onClick = onEditLyrics,
+                                                        shape = RoundedCornerShape(24.dp),
+                                                        border = BorderStroke(1.dp, palette.border),
+                                                        modifier = Modifier.height(48.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Filled.Edit,
+                                                            contentDescription = null,
+                                                            tint = palette.textPrimary,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Text(
+                                                            text = "Agregar letra manual",
+                                                            color = palette.textPrimary
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -793,13 +922,7 @@ private fun FullScreenPlayerContent(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (showLyricsView) {
-                                    "Portada"
-                                } else if (track.lyrics.isNotBlank()) {
-                                    "Ver letra"
-                                } else {
-                                    "Letra IA"
-                                },
+                                text = if (showLyricsView) "Portada" else "Ver letra",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = palette.textPrimary,
                                 maxLines = 1,

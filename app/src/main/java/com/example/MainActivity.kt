@@ -174,7 +174,7 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val folderImportState by viewModel.folderImportState.collectAsStateWithLifecycle()
-    val aiLyricsState by viewModel.aiLyricsState.collectAsStateWithLifecycle()
+    val lyricsLookupState by viewModel.lyricsLookupState.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val currentUser by Firebase.auth.authStateFlow().collectAsStateWithLifecycle(
         initialValue = Firebase.auth.currentUser
@@ -240,7 +240,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
             selectedAlbum = null
             selectedArtist = matched
         } else {
-            viewModel.clearAiLyricsError()
             lyricsSheetTrack = track
         }
     }
@@ -514,7 +513,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                         onAlbumClick = { selectedAlbum = it },
                                         onToggleFavorite = viewModel::toggleFavorite,
                                         onOpenLyrics = {
-                                            viewModel.clearAiLyricsError()
                                             lyricsSheetTrack = it
                                         },
                                         onDownloadTrack = viewModel::downloadTrackOffline,
@@ -536,7 +534,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                         onToggleFavorite = viewModel::toggleFavorite,
                                         onDeleteTrack = viewModel::deleteTrack,
                                         onOpenLyrics = {
-                                            viewModel.clearAiLyricsError()
                                             lyricsSheetTrack = it
                                         },
                                         onDownloadTrack = viewModel::downloadTrackOffline,
@@ -614,7 +611,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                     onTrackClick = ::playQueueAndExpand,
                     onToggleFavorite = viewModel::toggleFavorite,
                     onOpenLyrics = {
-                        viewModel.clearAiLyricsError()
                         lyricsSheetTrack = it
                     },
                     onDownloadTrack = viewModel::downloadTrackOffline,
@@ -646,7 +642,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                     onTrackClick = ::playQueueAndExpand,
                     onToggleFavorite = viewModel::toggleFavorite,
                     onOpenLyrics = {
-                        viewModel.clearAiLyricsError()
                         lyricsSheetTrack = it
                     },
                     onDownloadTrack = viewModel::downloadTrackOffline,
@@ -678,7 +673,6 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                     onCreateArtist = viewModel::adminCreateArtist,
                     onCreateAlbum = viewModel::adminCreateAlbum,
                     onPublishTrack = viewModel::adminPublishTrack,
-                    onFetchAiLyricsPreview = viewModel::fetchLyricsPreviewWithAi,
                     onDeleteArtist = viewModel::adminDeleteCatalogArtist,
                     onDeleteAlbum = viewModel::adminDeleteCatalogAlbum,
                     onDeleteTrack = viewModel::adminDeleteCatalogTrack,
@@ -700,11 +694,14 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 )
             }
 
+            val playingTrackId = playbackState.currentTrack?.id
             FullScreenPlayerOverlay(
                 visible = isFullScreenPlayerOpen,
                 playbackState = playbackState,
-                isAiLyricsLoading = aiLyricsState.isLoading,
-                aiLyricsError = aiLyricsState.errorMessage,
+                isLyricsLoading = playingTrackId != null && lyricsLookupState.loadingTrackId == playingTrackId,
+                lyricsStatusMessage = if (playingTrackId != null && lyricsLookupState.statusTrackId == playingTrackId) {
+                    lyricsLookupState.statusMessage
+                } else null,
                 onCollapse = { isFullScreenPlayerOpen = false },
                 onPlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::playNext,
@@ -716,10 +713,11 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 onToggleFavorite = viewModel::toggleFavorite,
                 onDownloadTrack = viewModel::downloadTrackOffline,
                 onRemoveDownload = viewModel::removeOfflineDownload,
-                onFetchAiLyrics = viewModel::fetchLyricsWithAiForTrack,
                 onEditLyrics = {
-                    viewModel.clearAiLyricsError()
                     lyricsSheetTrack = it
+                },
+                onRequestAutoLyrics = { targetTrack, force ->
+                    viewModel.fetchLyricsFromLrcLib(targetTrack, forceRefresh = force)
                 }
             )
 
@@ -728,14 +726,16 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 val refreshed = uiState.tracks.firstOrNull { it.id == activeLyricsTrack.id } ?: activeLyricsTrack
                 LyricsDetailSheet(
                     track = refreshed,
-                    isAiLyricsLoading = aiLyricsState.isLoading,
-                    aiLyricsError = aiLyricsState.errorMessage,
+                    isLyricsLoading = lyricsLookupState.loadingTrackId == refreshed.id,
+                    lyricsStatusMessage = if (lyricsLookupState.statusTrackId == refreshed.id) {
+                        lyricsLookupState.statusMessage
+                    } else null,
                     onDismiss = { lyricsSheetTrack = null },
                     onSaveLyrics = { updated ->
                         viewModel.updateLyrics(refreshed, updated)
                     },
-                    onFetchAiLyrics = {
-                        viewModel.fetchLyricsWithAiForTrack(refreshed)
+                    onRequestAutoLyrics = { force ->
+                        viewModel.fetchLyricsFromLrcLib(refreshed, forceRefresh = force)
                     }
                 )
             }
