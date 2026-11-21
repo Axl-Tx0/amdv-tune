@@ -1,0 +1,6 @@
+{
+  "name": "AmdvTune",
+  "description": "Reproductor de música neón con búsqueda, biblioteca local, temas personalizables y sincronización en la nube.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

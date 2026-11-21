@@ -1,0 +1,236 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isCatalogAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email == 'amdvtune@gmail.com' &&
+             request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             data.themeMode is string && data.themeMode in ['NEON', 'NEGRO', 'BLANCO'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidUserTrack(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.artist is string && data.artist.size() >= 1 && data.artist.size() <= 100 &&
+             data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 86400 &&
+             data.favorite is bool &&
+             data.sourceType is string && data.sourceType in ['BUNDLED', 'LOCAL', 'CLOUD'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCatalogArtist(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.bio is string && data.bio.size() <= 500 &&
+             data.photoUrl is string && data.photoUrl.size() <= 1000 &&
+             data.published is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCatalogAlbum(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.artistId is string && isValidId(data.artistId) &&
+             data.artistName is string && data.artistName.size() >= 1 && data.artistName.size() <= 100 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.releaseYear is int && data.releaseYear >= 1900 && data.releaseYear <= 2100 &&
+             data.coverUrl is string && data.coverUrl.size() <= 1000 &&
+             data.published is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCatalogTrack(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.artistId is string && isValidId(data.artistId) &&
+             data.artistName is string && data.artistName.size() >= 1 && data.artistName.size() <= 100 &&
+             data.albumId is string && (data.albumId == '' || isValidId(data.albumId)) &&
+             data.albumTitle is string && data.albumTitle.size() <= 120 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 86400 &&
+             data.trackNumber is int && data.trackNumber >= 1 && data.trackNumber <= 999 &&
+             data.audioUrl is string && data.audioUrl.size() >= 1 && data.audioUrl.size() <= 1500 &&
+             data.coverUrl is string && data.coverUrl.size() <= 1500 &&
+             data.lyrics is string && data.lyrics.size() <= 5000 &&
+             data.published is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'themeMode', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'themeMode', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         incoming().diff(existing()).affectedKeys().hasOnly(['themeMode', 'updatedAt']) ||
+                         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'themeMode', 'updatedAt'])
+                       );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /tracks/{trackId} {
+        allow get: if isOwner(userId) && isValidId(trackId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(trackId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'artist', 'durationSec', 'favorite', 'sourceType', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'artist', 'durationSec', 'favorite', 'sourceType', 'createdAt', 'updatedAt']) &&
+                         isValidUserTrack(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(trackId) &&
+                         isValidUserTrack(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().sourceType == existing().sourceType &&
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly(['favorite', 'updatedAt']) ||
+                           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'artist', 'durationSec', 'favorite', 'updatedAt'])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(trackId);
+      }
+    }
+
+    match /catalog_artists/{artistId} {
+      allow get: if isValidId(artistId) &&
+                    (isCatalogAdmin() || (isSignedIn() && existing().published == true));
+      allow list: if isCatalogAdmin() || (isSignedIn() && existing().published == true);
+
+      allow create: if isCatalogAdmin() &&
+                       isValidId(artistId) &&
+                       incoming().keys().hasAll(['userId', 'name', 'bio', 'photoUrl', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'bio', 'photoUrl', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       isValidCatalogArtist(incoming());
+
+      allow update: if isCatalogAdmin() &&
+                       isValidId(artistId) &&
+                       isValidCatalogArtist(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'bio', 'photoUrl', 'published', 'updatedAt']);
+
+      allow delete: if isCatalogAdmin() && isValidId(artistId);
+    }
+
+    match /catalog_albums/{albumId} {
+      allow get: if isValidId(albumId) &&
+                    (isCatalogAdmin() || (isSignedIn() && existing().published == true));
+      allow list: if isCatalogAdmin() || (isSignedIn() && existing().published == true);
+
+      allow create: if isCatalogAdmin() &&
+                       isValidId(albumId) &&
+                       incoming().keys().hasAll(['userId', 'artistId', 'artistName', 'title', 'releaseYear', 'coverUrl', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'artistId', 'artistName', 'title', 'releaseYear', 'coverUrl', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       isValidCatalogAlbum(incoming()) &&
+                       exists(/databases/$(database)/documents/catalog_artists/$(incoming().artistId));
+
+      allow update: if isCatalogAdmin() &&
+                       isValidId(albumId) &&
+                       isValidCatalogAlbum(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['artistId', 'artistName', 'title', 'releaseYear', 'coverUrl', 'published', 'updatedAt']) &&
+                       exists(/databases/$(database)/documents/catalog_artists/$(incoming().artistId));
+
+      allow delete: if isCatalogAdmin() && isValidId(albumId);
+    }
+
+    match /catalog_tracks/{trackId} {
+      allow get: if isValidId(trackId) &&
+                    (isCatalogAdmin() || (isSignedIn() && existing().published == true));
+      allow list: if isCatalogAdmin() || (isSignedIn() && existing().published == true);
+
+      allow create: if isCatalogAdmin() &&
+                       isValidId(trackId) &&
+                       incoming().keys().hasAll(['userId', 'artistId', 'artistName', 'albumId', 'albumTitle', 'title', 'durationSec', 'trackNumber', 'audioUrl', 'coverUrl', 'lyrics', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'artistId', 'artistName', 'albumId', 'albumTitle', 'title', 'durationSec', 'trackNumber', 'audioUrl', 'coverUrl', 'lyrics', 'published', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       isValidCatalogTrack(incoming()) &&
+                       exists(/databases/$(database)/documents/catalog_artists/$(incoming().artistId)) &&
+                       (incoming().albumId == '' || exists(/databases/$(database)/documents/catalog_albums/$(incoming().albumId)));
+
+      allow update: if isCatalogAdmin() &&
+                       isValidId(trackId) &&
+                       isValidCatalogTrack(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['artistId', 'artistName', 'albumId', 'albumTitle', 'title', 'durationSec', 'trackNumber', 'audioUrl', 'coverUrl', 'lyrics', 'published', 'updatedAt']) &&
+                       exists(/databases/$(database)/documents/catalog_artists/$(incoming().artistId)) &&
+                       (incoming().albumId == '' || exists(/databases/$(database)/documents/catalog_albums/$(incoming().albumId)));
+
+      allow delete: if isCatalogAdmin() && isValidId(trackId);
+    }
+
+    function isValidAppReleaseConfig(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.latestVersionCode is int && data.latestVersionCode >= 1 && data.latestVersionCode <= 999999 &&
+             data.latestVersionName is string && data.latestVersionName.size() >= 1 && data.latestVersionName.size() <= 40 &&
+             data.downloadUrl is string && data.downloadUrl.size() >= 8 && data.downloadUrl.size() <= 1000 &&
+             data.downloadUrl.matches('^https://.*') &&
+             data.releaseNotes is string && data.releaseNotes.size() <= 1500 &&
+             data.mandatory is bool &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /app_config/{configId} {
+      allow get: if isSignedIn() && configId == 'release';
+      allow list: if false;
+
+      allow create, update: if isCatalogAdmin() &&
+                               configId == 'release' &&
+                               incoming().keys().hasAll(['userId', 'latestVersionCode', 'latestVersionName', 'downloadUrl', 'releaseNotes', 'mandatory', 'updatedAt']) &&
+                               incoming().keys().hasOnly(['userId', 'latestVersionCode', 'latestVersionName', 'downloadUrl', 'releaseNotes', 'mandatory', 'updatedAt']) &&
+                               incoming().userId == request.auth.uid &&
+                               isValidAppReleaseConfig(incoming());
+
+      allow delete: if isCatalogAdmin() && configId == 'release';
+    }
+  }
+}

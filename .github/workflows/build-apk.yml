@@ -1,0 +1,94 @@
+name: Compilar y Publicar APK (AMDV-TUNE)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Compilar APK y crear Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Configurar Android SDK y aceptar licencias
+        run: |
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          fi
+
+      - name: Configurar Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Preparar firma (debug.keystore) y archivo .env
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+          if [ ! -f .env ] && [ -f .env.example ]; then
+            cp .env.example .env
+          fi
+
+      - name: Leer versión de la app
+        id: app_version
+        run: |
+          VERSION_NAME=$(grep -oE 'versionName\s*=\s*"[^"]+"' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)"/\1/')
+          VERSION_CODE=$(grep -oE 'versionCode\s*=\s*[0-9]+' app/build.gradle.kts | head -n1 | grep -oE '[0-9]+')
+          VERSION_NAME="${VERSION_NAME:-1.0}"
+          VERSION_CODE="${VERSION_CODE:-1}"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_name=AMDV-TUNE-v${VERSION_NAME}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Compilar APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Preparar archivo APK final
+        run: |
+          APK_SOURCE="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_SOURCE" ]; then
+            APK_SOURCE=$(find app/build/outputs/apk -name "*.apk" | head -n1)
+          fi
+          cp "$APK_SOURCE" "${{ steps.app_version.outputs.apk_name }}"
+
+      - name: Guardar APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: AMDV-TUNE-v${{ steps.app_version.outputs.version_name }}
+          path: ${{ steps.app_version.outputs.apk_name }}
+          if-no-files-found: error
+
+      - name: Publicar o actualizar GitHub Release con el APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.app_version.outputs.tag }}"
+          VERSION_NAME="${{ steps.app_version.outputs.version_name }}"
+          VERSION_CODE="${{ steps.app_version.outputs.version_code }}"
+          APK_FILE="${{ steps.app_version.outputs.apk_name }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_FILE" --clobber
+          else
+            NOTES=$(printf 'Nueva versión **AMDV-TUNE v%s** (código de versión: `%s`).\n\n### Cómo instalar o actualizar\n1. Descarga el archivo **%s** de esta publicación.\n2. Tócalo en tu celular Android para instalar o actualizar sin perder tus datos.' "$VERSION_NAME" "$VERSION_CODE" "$APK_FILE")
+            gh release create "$TAG" "$APK_FILE" \
+              --title "AMDV-TUNE v${VERSION_NAME}" \
+              --notes "$NOTES"
+          fi
