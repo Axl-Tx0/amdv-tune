@@ -36,9 +36,10 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Preparar firma (debug.keystore) y archivo .env
+      - name: Preparar firma (debug.keystore), google-services.json y .env
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
             printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore
@@ -47,7 +48,14 @@ jobs:
             tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore
             echo "Keystore restaurado desde debug.keystore.base64."
           else
-            echo "::error::Falta el secreto DEBUG_KEYSTORE_BASE64 en GitHub (Settings -> Secrets and variables -> Actions). Agrégalo copiando el contenido del archivo debug.keystore.base64 de AI Studio para mantener la misma firma de tu app y que funcione el inicio de sesión con Google."
+            echo "::error::Falta el secreto DEBUG_KEYSTORE_BASE64 en GitHub (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "app/google-services.json restaurado desde GitHub Secret GOOGLE_SERVICES_JSON."
+          elif [ ! -f app/google-services.json ]; then
+            echo "::error::Falta el secreto GOOGLE_SERVICES_JSON en GitHub (Settings -> Secrets and variables -> Actions). Agrégalo para habilitar Firebase y el inicio de sesión con Google."
             exit 1
           fi
           if [ ! -f .env ] && [ -f .env.example ]; then
