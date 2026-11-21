@@ -150,21 +150,6 @@ class MainActivity : ComponentActivity() {
             openPlayerSignal++
         }
     }
-
-    override fun onResume() {
-        super.onResume()
-        PlaybackControllerHolder.getInstance(applicationContext).onAppResumed()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        PlaybackControllerHolder.getInstance(applicationContext).onAppStopped()
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        PlaybackControllerHolder.getInstance(applicationContext).onAppWindowFocusChanged(hasFocus)
-    }
 }
 
 @Composable

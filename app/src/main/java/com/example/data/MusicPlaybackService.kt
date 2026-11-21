@@ -23,6 +23,7 @@ import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState as PlatformPlaybackState
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -296,6 +297,11 @@ class MusicPlaybackService : Service() {
                 coverKey.startsWith("/") -> {
                     val file = File(coverKey)
                     if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+                }
+                coverKey.startsWith("content://") -> {
+                    contentResolver.openInputStream(Uri.parse(coverKey))?.use {
+                        BitmapFactory.decodeStream(it)
+                    }
                 }
                 coverKey.startsWith("http://") || coverKey.startsWith("https://") -> {
                     val conn = (URL(coverKey).openConnection() as HttpURLConnection).apply {

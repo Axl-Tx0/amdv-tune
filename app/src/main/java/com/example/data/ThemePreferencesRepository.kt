@@ -16,7 +16,7 @@ private val Context.themeDataStore: DataStore<Preferences> by preferencesDataSto
 class ThemePreferencesRepository(private val context: Context) {
     private val themeKey = stringPreferencesKey("app_theme_mode")
     private val autoContinueKey = booleanPreferencesKey("playback_auto_continue")
-    private val muteOnNotificationsKey = booleanPreferencesKey("playback_mute_on_notifications")
+    private val muteOnNotificationsKey = booleanPreferencesKey("playback_mute_on_notifications_v2")
 
     val themeModeFlow: Flow<AppThemeMode> = context.themeDataStore.data.map { prefs ->
         AppThemeMode.fromKey(prefs[themeKey])
@@ -27,7 +27,7 @@ class ThemePreferencesRepository(private val context: Context) {
     }
 
     val muteOnNotificationsFlow: Flow<Boolean> = context.themeDataStore.data.map { prefs ->
-        prefs[muteOnNotificationsKey] ?: true
+        prefs[muteOnNotificationsKey] ?: false
     }
 
     suspend fun setThemeMode(mode: AppThemeMode) {

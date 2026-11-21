@@ -835,13 +835,13 @@ private fun FullScreenPlayerContent(
                         ) {
                             Icon(
                                 imageVector = if (muteNotifOn) Icons.Filled.NotificationsOff else Icons.Filled.Notifications,
-                                contentDescription = "Silenciar al recibir o ver notificaciones",
+                                contentDescription = if (muteNotifOn) "Silenciar al llegar notificaciones" else "No silenciar con notificaciones",
                                 tint = if (muteNotifOn) palette.accent else palette.textSecondary,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (muteNotifOn) "Silenciar notif." else "Notif. normal",
+                                text = if (muteNotifOn) "Silenciar notif." else "Sin cortes",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = if (muteNotifOn) palette.accent else palette.textSecondary,
                                 maxLines = 1,

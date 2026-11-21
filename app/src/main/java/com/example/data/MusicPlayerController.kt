@@ -31,7 +31,7 @@ data class PlaybackState(
     val shuffleEnabled: Boolean = false,
     val repeatOneEnabled: Boolean = false,
     val autoContinueEnabled: Boolean = true,
-    val muteOnNotificationsEnabled: Boolean = true,
+    val muteOnNotificationsEnabled: Boolean = false,
     val isSilencedForNotification: Boolean = false,
     val errorMessage: String? = null
 )
@@ -55,7 +55,6 @@ class MusicPlayerController(private val context: Context) {
 
     private var mediaPlayer: MediaPlayer? = null
     private var tickerJob: Job? = null
-    private var shadeMuteJob: Job? = null
     private var focusRestoreJob: Job? = null
     private var transitionWakeLock: PowerManager.WakeLock? = null
 
@@ -69,9 +68,6 @@ class MusicPlayerController(private val context: Context) {
     private var hasAudioFocus = false
     private var resumeOnFocusGain = false
     private var mutedByNotificationFocus = false
-    private var duckedByFocus = false
-    private var mutedByShade = false
-    private var isAppInForeground = false
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
@@ -82,11 +78,10 @@ class MusicPlayerController(private val context: Context) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                     if (_playbackState.value.muteOnNotificationsEnabled) {
                         mutedByNotificationFocus = true
-                        duckedByFocus = false
                         applyEffectiveVolume()
                         scheduleFocusSilenceFallback()
                     } else {
-                        duckedByFocus = true
+                        // Mantener el volumen completo sin cortar ni bajar la música al llegar notificaciones
                         mutedByNotificationFocus = false
                         applyEffectiveVolume()
                     }
@@ -104,7 +99,6 @@ class MusicPlayerController(private val context: Context) {
                     focusRestoreJob?.cancel()
                     focusRestoreJob = null
                     mutedByNotificationFocus = false
-                    duckedByFocus = false
                     applyEffectiveVolume()
                     if (resumeOnFocusGain) {
                         resumeOnFocusGain = false
@@ -117,7 +111,6 @@ class MusicPlayerController(private val context: Context) {
                     focusRestoreJob = null
                     resumeOnFocusGain = false
                     mutedByNotificationFocus = false
-                    duckedByFocus = false
                     hasAudioFocus = false
                     pauseInternal(abandonFocus = true, markSilenced = false)
                 }
@@ -341,7 +334,6 @@ class MusicPlayerController(private val context: Context) {
         try {
             requestAudioFocusIfNeeded()
             mutedByNotificationFocus = false
-            duckedByFocus = false
             applyEffectiveVolumeTo(player)
             if (!player.isPlaying) {
                 player.start()
@@ -349,7 +341,7 @@ class MusicPlayerController(private val context: Context) {
                     it.copy(
                         isPlaying = true,
                         isTransitioning = false,
-                        isSilencedForNotification = mutedByShade,
+                        isSilencedForNotification = false,
                         errorMessage = null
                     )
                 }
@@ -468,58 +460,17 @@ class MusicPlayerController(private val context: Context) {
     fun setMuteOnNotificationsEnabled(enabled: Boolean) {
         _playbackState.update { it.copy(muteOnNotificationsEnabled = enabled) }
         if (!enabled) {
-            shadeMuteJob?.cancel()
             focusRestoreJob?.cancel()
-            mutedByShade = false
+            focusRestoreJob = null
             mutedByNotificationFocus = false
             applyEffectiveVolume()
-        }
-    }
-
-    fun onAppResumed() {
-        isAppInForeground = true
-    }
-
-    fun onAppStopped() {
-        isAppInForeground = false
-        shadeMuteJob?.cancel()
-        shadeMuteJob = null
-        if (mutedByShade) {
-            mutedByShade = false
-            applyEffectiveVolume()
-        }
-    }
-
-    fun onAppWindowFocusChanged(hasFocus: Boolean) {
-        if (hasFocus) {
-            shadeMuteJob?.cancel()
-            shadeMuteJob = null
-            if (mutedByShade) {
-                mutedByShade = false
-                applyEffectiveVolume()
-            }
-            return
-        }
-
-        // Window lost focus while Activity is still in foreground (e.g., user pulled down the
-        // notification shade or opened a heads-up notification preview to read it).
-        // Wait 140ms so normal backgrounding / screen lock (which fires onStop immediately) is never muted.
-        if (isAppInForeground && _playbackState.value.muteOnNotificationsEnabled && _playbackState.value.isPlaying) {
-            shadeMuteJob?.cancel()
-            shadeMuteJob = scope.launch {
-                delay(140L)
-                if (isAppInForeground && _playbackState.value.muteOnNotificationsEnabled && _playbackState.value.isPlaying) {
-                    mutedByShade = true
-                    applyEffectiveVolume()
-                }
-            }
         }
     }
 
     private fun scheduleFocusSilenceFallback() {
         focusRestoreJob?.cancel()
         focusRestoreJob = scope.launch {
-            delay(8_000L)
+            delay(4_500L)
             if (mutedByNotificationFocus) {
                 mutedByNotificationFocus = false
                 applyEffectiveVolume()
@@ -532,18 +483,13 @@ class MusicPlayerController(private val context: Context) {
         if (player != null) {
             applyEffectiveVolumeTo(player)
         } else {
-            val silenced = mutedByNotificationFocus || mutedByShade
-            _playbackState.update { it.copy(isSilencedForNotification = silenced) }
+            _playbackState.update { it.copy(isSilencedForNotification = mutedByNotificationFocus) }
         }
     }
 
     private fun applyEffectiveVolumeTo(player: MediaPlayer) {
-        val silenced = mutedByNotificationFocus || mutedByShade
-        val vol = when {
-            silenced -> 0f
-            duckedByFocus -> 0.30f
-            else -> 1f
-        }
+        val silenced = mutedByNotificationFocus
+        val vol = if (silenced) 0f else 1f
         try {
             player.setVolume(vol, vol)
         } catch (_: Exception) {
@@ -561,6 +507,8 @@ class MusicPlayerController(private val context: Context) {
             val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attrs)
                 .setAcceptsDelayedFocusGain(true)
+                // Evita que Android baje/corte el volumen automáticamente en notificaciones;
+                // nuestro listener mantiene volumen 1.0 salvo que el usuario active "Silenciar notif."
                 .setWillPauseWhenDucked(true)
                 .setOnAudioFocusChangeListener(audioFocusListener)
                 .build()
@@ -680,7 +628,6 @@ class MusicPlayerController(private val context: Context) {
     }
 
     fun release() {
-        shadeMuteJob?.cancel()
         focusRestoreJob?.cancel()
         releaseTransitionWakeLock()
         releasePlayerOnly()

@@ -501,7 +501,7 @@ fun ProfileScreen(
                     PlaybackSettingRow(
                         icon = Icons.Filled.NotificationsOff,
                         title = "Silenciar con notificaciones",
-                        subtitle = "Silencia la música al recibir una notificación o al bajar la barra para verla",
+                        subtitle = "Opcional: desactivado por defecto para que la música no se corte con notificaciones ni al ir a Inicio",
                         checked = muteOnNotificationsEnabled,
                         onCheckedChange = { onToggleMuteOnNotifications() },
                         testTag = "setting_mute_notif_switch"

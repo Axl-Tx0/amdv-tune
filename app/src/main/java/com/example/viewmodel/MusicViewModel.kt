@@ -418,9 +418,9 @@ class MusicViewModel(
             themeRepo.setMuteOnNotifications(next)
         }
         _syncMessage.value = if (next) {
-            "Silencio en notificaciones activado: se silenciará al llegar o ver una notificación"
+            "Silencio en notificaciones activado: se silenciará brevemente al llegar una notificación"
         } else {
-            "Silencio en notificaciones desactivado"
+            "Música sin cortes activada: no se silenciará al llegar notificaciones"
         }
     }
 
