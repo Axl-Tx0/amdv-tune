@@ -705,6 +705,204 @@ class CatalogRepository(
         }
     }
 
+    suspend fun updateArtist(
+        artist: CatalogArtist,
+        newName: String,
+        newBio: String,
+        newPhotoUri: Uri?,
+        newPhotoUrlInput: String,
+        relatedAlbums: List<CatalogAlbum>,
+        relatedTracks: List<CatalogTrack>,
+        onProgress: (Float) -> Unit = {}
+    ): Result<Unit> {
+        val docPath = "catalog_artists/${artist.id}"
+        return try {
+            requireAdminUid()
+            val safeName = newName.trim().take(100)
+            require(safeName.isNotEmpty()) { "Ingresa el nombre del artista." }
+            val safeBio = newBio.trim().take(500)
+
+            val resolvedPhoto = when {
+                newPhotoUri != null -> uploadUriToStorage(
+                    uri = newPhotoUri,
+                    storagePath = "catalog/artists/${artist.id}_${System.currentTimeMillis()}.jpg",
+                    contentType = appContext.contentResolver.getType(newPhotoUri) ?: "image/jpeg",
+                    onProgress = onProgress
+                ).take(1000)
+                newPhotoUrlInput.trim() != artist.photoUrl.trim() -> {
+                    if (newPhotoUrlInput.isBlank()) "" else validateDirectUrl(newPhotoUrlInput, 1000, "foto del artista")
+                }
+                else -> artist.photoUrl.take(1000)
+            }
+
+            db.collection("catalog_artists").document(artist.id)
+                .update(
+                    mapOf(
+                        "name" to safeName,
+                        "bio" to safeBio,
+                        "photoUrl" to resolvedPhoto,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+
+            if (safeName != artist.name) {
+                relatedAlbums.filter { it.artistId == artist.id }.forEach { alb ->
+                    runCatching {
+                        db.collection("catalog_albums").document(alb.id)
+                            .update(mapOf("artistName" to safeName, "updatedAt" to FieldValue.serverTimestamp()))
+                            .await()
+                    }
+                }
+                relatedTracks.filter { it.artistId == artist.id }.forEach { trk ->
+                    runCatching {
+                        db.collection("catalog_tracks").document(trk.id)
+                            .update(mapOf("artistName" to safeName, "updatedAt" to FieldValue.serverTimestamp()))
+                            .await()
+                    }
+                }
+            }
+            onProgress(1f)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(Exception(formatUploadError(e)))
+        }
+    }
+
+    suspend fun updateAlbum(
+        album: CatalogAlbum,
+        newArtist: CatalogArtist,
+        newTitle: String,
+        newReleaseYear: Long,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        relatedTracks: List<CatalogTrack>,
+        onProgress: (Float) -> Unit = {}
+    ): Result<Unit> {
+        val docPath = "catalog_albums/${album.id}"
+        return try {
+            requireAdminUid()
+            val safeTitle = newTitle.trim().take(120)
+            require(safeTitle.isNotEmpty()) { "Ingresa el título del álbum." }
+            val safeYear = newReleaseYear.coerceIn(1900L, 2100L)
+            val safeArtistName = newArtist.name.trim().ifBlank { "Artista" }.take(100)
+
+            val resolvedCover = when {
+                newCoverUri != null -> uploadUriToStorage(
+                    uri = newCoverUri,
+                    storagePath = "catalog/albums/${album.id}_${System.currentTimeMillis()}.jpg",
+                    contentType = appContext.contentResolver.getType(newCoverUri) ?: "image/jpeg",
+                    onProgress = onProgress
+                ).take(1000)
+                newCoverUrlInput.trim() != album.coverUrl.trim() -> {
+                    if (newCoverUrlInput.isBlank()) "" else validateDirectUrl(newCoverUrlInput, 1000, "portada del álbum")
+                }
+                else -> album.coverUrl.take(1000)
+            }
+
+            db.collection("catalog_albums").document(album.id)
+                .update(
+                    mapOf(
+                        "artistId" to newArtist.id,
+                        "artistName" to safeArtistName,
+                        "title" to safeTitle,
+                        "releaseYear" to safeYear,
+                        "coverUrl" to resolvedCover,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+
+            val coverChanged = resolvedCover != album.coverUrl && resolvedCover.isNotBlank()
+            if (safeTitle != album.title || newArtist.id != album.artistId || coverChanged) {
+                relatedTracks.filter { it.albumId == album.id }.forEach { trk ->
+                    val trkUpdate = mutableMapOf<String, Any>(
+                        "artistId" to newArtist.id,
+                        "artistName" to safeArtistName,
+                        "albumTitle" to safeTitle,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (coverChanged && (trk.coverUrl.isBlank() || trk.coverUrl == album.coverUrl)) {
+                        trkUpdate["coverUrl"] = resolvedCover.take(1500)
+                    }
+                    runCatching {
+                        db.collection("catalog_tracks").document(trk.id).update(trkUpdate).await()
+                    }
+                }
+            }
+            onProgress(1f)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(Exception(formatUploadError(e)))
+        }
+    }
+
+    suspend fun updateTrack(
+        track: CatalogTrack,
+        newArtist: CatalogArtist,
+        newAlbum: CatalogAlbum?,
+        newTitle: String,
+        newTrackNumber: Long,
+        newLyrics: String,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        onProgress: (Float) -> Unit = {}
+    ): Result<Unit> {
+        val docPath = "catalog_tracks/${track.id}"
+        return try {
+            requireAdminUid()
+            val safeTitle = newTitle.trim().take(120)
+            require(safeTitle.isNotEmpty()) { "Ingresa el título de la canción." }
+            val safeArtistName = newArtist.name.trim().ifBlank { "Artista" }.take(100)
+            val safeAlbumId = newAlbum?.id.orEmpty()
+            val safeAlbumTitle = newAlbum?.title?.take(120).orEmpty()
+            val safeTrackNumber = newTrackNumber.coerceIn(1L, 999L)
+            val safeLyrics = LrcParser.trimToMaxChars(newLyrics, 5000)
+
+            val resolvedCover = when {
+                newCoverUri != null -> uploadUriToStorage(
+                    uri = newCoverUri,
+                    storagePath = "catalog/track_covers/${track.id}_${System.currentTimeMillis()}.jpg",
+                    contentType = appContext.contentResolver.getType(newCoverUri) ?: "image/jpeg",
+                    onProgress = onProgress
+                ).take(1500)
+                newCoverUrlInput.trim() != track.coverUrl.trim() -> {
+                    if (newCoverUrlInput.isBlank()) "" else validateDirectUrl(newCoverUrlInput, 1500, "portada")
+                }
+                else -> track.coverUrl.take(1500)
+            }
+
+            db.collection("catalog_tracks").document(track.id)
+                .update(
+                    mapOf(
+                        "artistId" to newArtist.id,
+                        "artistName" to safeArtistName,
+                        "albumId" to safeAlbumId,
+                        "albumTitle" to safeAlbumTitle,
+                        "title" to safeTitle,
+                        "trackNumber" to safeTrackNumber,
+                        "coverUrl" to resolvedCover,
+                        "lyrics" to safeLyrics,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+            onProgress(1f)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(Exception(formatUploadError(e)))
+        }
+    }
+
     suspend fun deleteCatalogTrack(trackId: String): Result<Unit> {
         val docPath = "catalog_tracks/$trackId"
         return try {

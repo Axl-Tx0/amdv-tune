@@ -36,17 +36,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.AddLink
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -100,6 +105,9 @@ fun ArtistDetailScreen(
     albums: List<CatalogAlbum>,
     tracks: List<TrackUiModel>,
     playbackState: PlaybackState,
+    isFollowing: Boolean = false,
+    followerCount: Long = 0L,
+    onToggleFollow: () -> Unit = {},
     onDismiss: () -> Unit,
     onSelectRelatedArtist: (CatalogArtist) -> Unit,
     onAlbumClick: (CatalogAlbum) -> Unit,
@@ -110,7 +118,10 @@ fun ArtistDetailScreen(
     onRemoveDownload: (String) -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
-    onExpandPlayer: () -> Unit
+    onExpandPlayer: () -> Unit,
+    onAddToPlaylist: (TrackUiModel) -> Unit = {},
+    onPlayNextInQueue: (TrackUiModel) -> Unit = {},
+    onAddToQueueEnd: (TrackUiModel) -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -343,8 +354,9 @@ fun ArtistDetailScreen(
                             )
                             Spacer(modifier = Modifier.width(14.dp))
                             Column(modifier = Modifier.weight(1f)) {
+                                val followersText = if (followerCount == 1L) "1 seguidor" else "$followerCount seguidores"
                                 Text(
-                                    text = "${artistAlbums.size} álbumes • ${artistTracks.size} canciones",
+                                    text = "$followersText • ${artistAlbums.size} álbumes • ${artistTracks.size} canciones",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = warmSubtitleColor
                                 )
@@ -361,41 +373,99 @@ fun ArtistDetailScreen(
                             }
                         }
 
-                        OutlinedButton(
-                            enabled = artistTracks.isNotEmpty() || tracks.isNotEmpty(),
-                            onClick = {
-                                val pool = if (artistTracks.isNotEmpty()) {
-                                    artistTracks.shuffled() + tracks.filter { it.artistId != artist.id }.shuffled().take(12)
-                                } else {
-                                    tracks.shuffled()
-                                }
-                                pool.firstOrNull()?.let { first ->
-                                    onTrackClick(first, pool)
-                                }
-                            },
-                            shape = RoundedCornerShape(50),
-                            border = BorderStroke(1.dp, palette.textSecondary.copy(alpha = 0.35f)),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (palette.isDark) Color.White.copy(alpha = 0.04f) else palette.surfaceElevated.copy(alpha = 0.5f),
-                                contentColor = palette.textPrimary
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("artist_radio_button")
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Sensors,
-                                contentDescription = null,
-                                tint = palette.textPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Radio",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = palette.textPrimary
-                            )
+                            if (isFollowing) {
+                                OutlinedButton(
+                                    onClick = onToggleFollow,
+                                    shape = RoundedCornerShape(50),
+                                    border = BorderStroke(1.dp, palette.accent),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = palette.accent.copy(alpha = 0.14f),
+                                        contentColor = palette.accent
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("artist_follow_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = palette.accent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Siguiendo",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = palette.accent
+                                    )
+                                }
+                            } else {
+                                Button(
+                                    onClick = onToggleFollow,
+                                    shape = RoundedCornerShape(50),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = sectionTitleColor,
+                                        contentColor = if (palette.isDark) Color(0xFF16120B) else Color.White
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("artist_follow_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PersonAdd,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Seguir",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
+
+                            OutlinedButton(
+                                enabled = artistTracks.isNotEmpty() || tracks.isNotEmpty(),
+                                onClick = {
+                                    val pool = if (artistTracks.isNotEmpty()) {
+                                        artistTracks.shuffled() + tracks.filter { it.artistId != artist.id }.shuffled().take(12)
+                                    } else {
+                                        tracks.shuffled()
+                                    }
+                                    pool.firstOrNull()?.let { first ->
+                                        onTrackClick(first, pool)
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                border = BorderStroke(1.dp, palette.textSecondary.copy(alpha = 0.35f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (palette.isDark) Color.White.copy(alpha = 0.04f) else palette.surfaceElevated.copy(alpha = 0.5f),
+                                    contentColor = palette.textPrimary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("artist_radio_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Sensors,
+                                    contentDescription = null,
+                                    tint = palette.textPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Radio",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = palette.textPrimary
+                                )
+                            }
                         }
                     }
                 }
@@ -461,7 +531,10 @@ fun ArtistDetailScreen(
                                     onToggleFavorite = { onToggleFavorite(track) },
                                     onOpenLyrics = { onOpenLyrics(track) },
                                     onDownloadClick = { onDownloadTrack(track.id) },
-                                    onRemoveDownloadClick = { onRemoveDownload(track.id) }
+                                    onRemoveDownloadClick = { onRemoveDownload(track.id) },
+                                    onAddToPlaylist = { onAddToPlaylist(track) },
+                                    onPlayNextInQueue = { onPlayNextInQueue(track) },
+                                    onAddToQueueEnd = { onAddToQueueEnd(track) }
                                 )
                             }
                             if (artistTracks.size > 5) {
@@ -663,7 +736,10 @@ fun AlbumDetailScreen(
     onRemoveDownload: (String) -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
-    onExpandPlayer: () -> Unit
+    onExpandPlayer: () -> Unit,
+    onAddToPlaylist: (TrackUiModel) -> Unit = {},
+    onPlayNextInQueue: (TrackUiModel) -> Unit = {},
+    onAddToQueueEnd: (TrackUiModel) -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -912,7 +988,10 @@ fun AlbumDetailScreen(
                                     onToggleFavorite = { onToggleFavorite(track) },
                                     onOpenLyrics = { onOpenLyrics(track) },
                                     onDownloadClick = { onDownloadTrack(track.id) },
-                                    onRemoveDownloadClick = { onRemoveDownload(track.id) }
+                                    onRemoveDownloadClick = { onRemoveDownload(track.id) },
+                                    onAddToPlaylist = { onAddToPlaylist(track) },
+                                    onPlayNextInQueue = { onPlayNextInQueue(track) },
+                                    onAddToQueueEnd = { onAddToQueueEnd(track) }
                                 )
                             }
                         }
@@ -959,7 +1038,10 @@ private fun OpenTuneTrackRow(
     onToggleFavorite: () -> Unit,
     onOpenLyrics: () -> Unit,
     onDownloadClick: () -> Unit,
-    onRemoveDownloadClick: () -> Unit
+    onRemoveDownloadClick: () -> Unit,
+    onAddToPlaylist: () -> Unit = {},
+    onPlayNextInQueue: () -> Unit = {},
+    onAddToQueueEnd: () -> Unit = {}
 ) {
     val palette = LocalAmdvPalette.current
     var menuExpanded by remember { mutableStateOf(false) }
@@ -1084,6 +1166,48 @@ private fun OpenTuneTrackRow(
                     onClick = {
                         menuExpanded = false
                         onOpenLyrics()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Reproducir siguiente", color = palette.textPrimary) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.SkipNext,
+                            contentDescription = null,
+                            tint = palette.accent
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onPlayNextInQueue()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Añadir a la cola", color = palette.textPrimary) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                            contentDescription = null,
+                            tint = palette.accent
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onAddToQueueEnd()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Añadir a playlist", color = palette.textPrimary) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                            contentDescription = null,
+                            tint = palette.accent
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onAddToPlaylist()
                     }
                 )
                 if (track.isCloudCatalog) {

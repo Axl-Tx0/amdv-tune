@@ -171,6 +171,171 @@ fun LocalTrackEntity.toUiModel(): TrackUiModel = TrackUiModel(
     lyrics = lyrics
 )
 
+@Keep
+@IgnoreExtraProperties
+data class UserPlaylist(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val name: String = "",
+    val description: String = "",
+    val trackIds: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+enum class EqualizerPreset(val key: String, val label: String, val bandLevelsMb: List<Int>, val defaultBass: Int) {
+    NORMAL("NORMAL", "Normal", listOf(0, 0, 0, 0, 0), 0),
+    BASS_BOOST("BASS_BOOST", "Graves+", listOf(600, 400, 0, 100, 200), 650),
+    ELECTRONICA("ELECTRONICA", "Electrónica", listOf(500, 200, -100, 300, 500), 500),
+    ROCK("ROCK", "Rock", listOf(450, 150, -150, 250, 450), 350),
+    POP("POP", "Pop", listOf(-100, 250, 400, 200, -100), 200),
+    VOCAL("VOCAL", "Vocal", listOf(-250, 100, 450, 350, 100), 0),
+    CUSTOM("CUSTOM", "Manual", listOf(0, 0, 0, 0, 0), 0);
+
+    companion object {
+        fun fromKey(raw: String?): EqualizerPreset {
+            return entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } ?: NORMAL
+        }
+    }
+}
+
+data class EqualizerBandUi(
+    val index: Int,
+    val label: String,
+    val levelMb: Int
+)
+
+data class AudioEffectsState(
+    val enabled: Boolean = false,
+    val preset: EqualizerPreset = EqualizerPreset.NORMAL,
+    val bands: List<EqualizerBandUi> = defaultBands(),
+    val minLevelMb: Int = -1200,
+    val maxLevelMb: Int = 1200,
+    val bassBoostStrength: Int = 0, // 0..1000
+    val hardwareAttached: Boolean = false
+) {
+    companion object {
+        fun defaultBands(levels: List<Int> = listOf(0, 0, 0, 0, 0)): List<EqualizerBandUi> {
+            val labels = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
+            return labels.mapIndexed { idx, label ->
+                EqualizerBandUi(index = idx, label = label, levelMb = levels.getOrElse(idx) { 0 })
+            }
+        }
+    }
+}
+
+data class ListeningStats(
+    val recentTrackIds: List<String> = emptyList(),
+    val playCounts: Map<String, Int> = emptyMap(),
+    val totalListeningSec: Long = 0L,
+    val activeDays: List<String> = emptyList(), // ISO YYYY-MM-DD sorted ascending
+    val lyricsOffsetsMs: Map<String, Long> = emptyMap()
+) {
+    fun currentStreakDays(todayIso: String): Int {
+        if (activeDays.isEmpty()) return 0
+        val daySet = activeDays.toSet()
+        return runCatching {
+            var cursor = java.time.LocalDate.parse(todayIso)
+            if (!daySet.contains(cursor.toString())) {
+                cursor = cursor.minusDays(1)
+            }
+            var streak = 0
+            while (daySet.contains(cursor.toString())) {
+                streak++
+                cursor = cursor.minusDays(1)
+            }
+            streak
+        }.getOrElse { activeDays.size }
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class CommunityTrackStats(
+    @DocumentId val id: String = "",
+    val trackId: String = "",
+    val playCount: Long = 0L,
+    val fireCount: Long = 0L,
+    val heartCount: Long = 0L,
+    val headphonesCount: Long = 0L,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class UserTrackReaction(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val trackId: String = "",
+    val fire: Boolean = false,
+    val heart: Boolean = false,
+    val headphones: Boolean = false,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class JamSession(
+    @DocumentId val id: String = "",
+    val roomCode: String = "",
+    val hostUserId: String = "",
+    val hostName: String = "",
+    val currentTrackId: String = "",
+    val playing: Boolean = false,
+    val positionMs: Long = 0L,
+    val queueTrackIds: List<String> = emptyList(),
+    val active: Boolean = true,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class SharedPlaylist(
+    @DocumentId val id: String = "",
+    val shareCode: String = "",
+    val ownerUserId: String = "",
+    val ownerName: String = "",
+    val name: String = "",
+    val description: String = "",
+    val trackIds: List<String> = emptyList(),
+    val collaborative: Boolean = false,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class UserArtistFollow(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val artistId: String = "",
+    val artistName: String = "",
+    @ServerTimestamp val followedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class ArtistStats(
+    @DocumentId val id: String = "",
+    val artistId: String = "",
+    val followerCount: Long = 0L,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class TrackComment(
+    @DocumentId val id: String = "",
+    val trackId: String = "",
+    val trackTitle: String = "",
+    val userId: String = "",
+    val authorName: String = "",
+    val timestampMs: Long = 0L,
+    val text: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null
+)
+
 fun DownloadedTrackEntity.toOfflineUiModel(isFavorite: Boolean): TrackUiModel = TrackUiModel(
     id = trackId,
     title = title,

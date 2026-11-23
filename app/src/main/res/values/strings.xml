@@ -66,4 +66,11 @@
     <string name="credits_design_label">Identidad y diseño</string>
     <string name="credits_design_value">Interfaz Material 3 con modos Neón, Negro y Blanco</string>
     <string name="credits_footer">© 2026 AMDV-TUNE • Todos los derechos reservados</string>
+    <string name="widget_description">Controla AMDV-TUNE directamente desde tu pantalla de inicio</string>
+    <string name="widget_idle_title">AMDV-TUNE</string>
+    <string name="widget_idle_subtitle">Toca para abrir tu música</string>
+    <string name="widget_cover_cd">Portada actual</string>
+    <string name="widget_prev_cd">Canción anterior</string>
+    <string name="widget_play_pause_cd">Reproducir o pausar</string>
+    <string name="widget_next_cd">Siguiente canción</string>
 </resources>

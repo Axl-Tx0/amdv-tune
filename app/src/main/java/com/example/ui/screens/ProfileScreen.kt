@@ -18,20 +18,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Palette
@@ -41,6 +49,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +83,8 @@ import com.example.BuildConfig
 import com.example.R
 import com.example.model.AppReleaseConfig
 import com.example.model.AppThemeMode
+import com.example.model.TrackUiModel
+import com.example.ui.components.TrackCoverArt
 import com.example.ui.theme.HeartPink
 import com.example.ui.theme.LocalAmdvPalette
 import com.google.firebase.auth.FirebaseUser
@@ -89,10 +100,19 @@ fun ProfileScreen(
     repeatOneEnabled: Boolean,
     autoContinueEnabled: Boolean,
     muteOnNotificationsEnabled: Boolean,
+    isEqualizerEnabled: Boolean = false,
+    crossfadeSeconds: Int = 0,
+    hasActiveTrack: Boolean = false,
+    activeSleepTimerLabel: String? = null,
     latestRelease: AppReleaseConfig?,
     favoriteCount: Int,
     offlineCount: Int,
     totalSongsCount: Int,
+    topTracks: List<Pair<TrackUiModel, Int>> = emptyList(),
+    topArtists: List<Pair<String, Int>> = emptyList(),
+    totalPlaysCount: Int = 0,
+    totalListeningMinutes: Int = 0,
+    listeningStreakDays: Int = 0,
     onSignInClick: () -> Unit,
     onSignOutClick: () -> Unit,
     onSelectTheme: (AppThemeMode) -> Unit,
@@ -100,6 +120,11 @@ fun ProfileScreen(
     onToggleRepeat: () -> Unit,
     onToggleAutoContinue: () -> Unit,
     onToggleMuteOnNotifications: () -> Unit,
+    onOpenEqualizer: () -> Unit = {},
+    onOpenSleepTimer: () -> Unit = {},
+    onOpenDrivingMode: () -> Unit = {},
+    onOpenReplay: () -> Unit = {},
+    onTrackClick: (TrackUiModel) -> Unit = {},
     onOpenUpdateDialog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -432,6 +457,97 @@ fun ProfileScreen(
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = palette.surface,
+                border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.65f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOpenReplay)
+                    .testTag("profile_amdv_replay_card")
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    Color(0xFF7C3AED).copy(alpha = if (palette.isDark) 0.45f else 0.18f),
+                                    palette.accent.copy(alpha = if (palette.isDark) 0.30f else 0.14f)
+                                )
+                            )
+                        )
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(palette.accent.copy(alpha = 0.22f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AutoAwesome,
+                                contentDescription = null,
+                                tint = palette.accent,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "AMDV REPLAY",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = palette.textPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (totalPlaysCount > 0) {
+                                    "🔥 Racha: $listeningStreakDays días • ${totalListeningMinutes.coerceAtLeast(totalPlaysCount * 3)} min escuchados"
+                                } else {
+                                    "Descubre tu resumen animado estilo Stories y compártelo"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = palette.accent
+                        ) {
+                            Text(
+                                text = "Ver",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (palette.isDark) Color.Black else Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            PersonalTopCard(
+                totalPlaysCount = totalPlaysCount,
+                topTracks = topTracks,
+                topArtists = topArtists,
+                onTrackClick = onTrackClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_top_personal_card")
+            )
+        }
+
+        item {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = palette.surface,
                 border = BorderStroke(1.dp, palette.border),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -505,6 +621,60 @@ fun ProfileScreen(
                         checked = muteOnNotificationsEnabled,
                         onCheckedChange = { onToggleMuteOnNotifications() },
                         testTag = "setting_mute_notif_switch"
+                    )
+
+                    HorizontalDivider(
+                        color = palette.border.copy(alpha = 0.6f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    val eqAndCrossfadeBadge = when {
+                        isEqualizerEnabled && crossfadeSeconds > 0 -> "EQ • ${crossfadeSeconds}s"
+                        crossfadeSeconds > 0 -> "Crossfade ${crossfadeSeconds}s"
+                        isEqualizerEnabled -> "Activo"
+                        else -> "Apagado"
+                    }
+                    PlaybackActionShortcutRow(
+                        icon = Icons.Filled.Equalizer,
+                        title = "Ecualizador, Bass Boost y Crossfade",
+                        subtitle = "5 bandas, refuerzo de graves y transición suave (0s–12s)",
+                        badgeText = eqAndCrossfadeBadge,
+                        isActive = isEqualizerEnabled || crossfadeSeconds > 0,
+                        onClick = onOpenEqualizer,
+                        testTag = "profile_open_eq_btn"
+                    )
+
+                    HorizontalDivider(
+                        color = palette.border.copy(alpha = 0.6f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    PlaybackActionShortcutRow(
+                        icon = Icons.Filled.Timer,
+                        title = "Temporizador de apagado",
+                        subtitle = "Pausa automática al dormir o al terminar la pista",
+                        badgeText = activeSleepTimerLabel ?: "Apagado",
+                        isActive = activeSleepTimerLabel != null,
+                        onClick = onOpenSleepTimer,
+                        testTag = "profile_open_timer_btn"
+                    )
+
+                    HorizontalDivider(
+                        color = palette.border.copy(alpha = 0.6f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    PlaybackActionShortcutRow(
+                        icon = Icons.Filled.DirectionsCar,
+                        title = "Modo Conducción",
+                        subtitle = "Pantalla OLED de alto contraste con botones grandes para el auto",
+                        badgeText = if (hasActiveTrack) "Abrir" else "Sin pista",
+                        isActive = hasActiveTrack,
+                        onClick = onOpenDrivingMode,
+                        testTag = "profile_driving_mode_btn"
                     )
                 }
             }
@@ -680,6 +850,218 @@ private fun PlaybackSettingRow(
             ),
             modifier = Modifier.testTag(testTag)
         )
+    }
+}
+
+@Composable
+private fun PlaybackActionShortcutRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    badgeText: String,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val palette = LocalAmdvPalette.current
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 4.dp)
+            .testTag(testTag)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (isActive) palette.accent else palette.textSecondary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = palette.textPrimary
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (isActive) palette.accent.copy(alpha = 0.16f) else palette.surfaceElevated,
+            border = BorderStroke(1.dp, if (isActive) palette.accent else palette.border)
+        ) {
+            Text(
+                text = badgeText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isActive) palette.accent else palette.textSecondary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = palette.textSecondary,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+@Composable
+private fun PersonalTopCard(
+    totalPlaysCount: Int,
+    topTracks: List<Pair<TrackUiModel, Int>>,
+    topArtists: List<Pair<String, Int>>,
+    onTrackClick: (TrackUiModel) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalAmdvPalette.current
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surface,
+        border = BorderStroke(1.dp, palette.border),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Leaderboard,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "TU TOP PERSONAL",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.textPrimary
+                    )
+                }
+                if (totalPlaysCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = palette.accent.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = "$totalPlaysCount reproducciones",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.accent,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (topTracks.isEmpty()) {
+                Text(
+                    text = "Reproduce tus canciones favoritas y aquí aparecerán tus temas y artistas más escuchados.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary
+                )
+            } else {
+                topTracks.take(5).forEachIndexed { idx, (track, count) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onTrackClick(track) }
+                            .padding(vertical = 6.dp, horizontal = 4.dp)
+                    ) {
+                        Text(
+                            text = "#${idx + 1}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (idx == 0) palette.accent else palette.textSecondary,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        TrackCoverArt(
+                            coverKey = track.coverKey,
+                            title = track.title,
+                            size = 42.dp,
+                            cornerRadius = 9.dp
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = track.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = track.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = palette.surfaceElevated,
+                            border = BorderStroke(1.dp, palette.border)
+                        ) {
+                            Text(
+                                text = "$count×",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.accent,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (topArtists.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Artistas más escuchados",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(topArtists.take(6), key = { it.first }) { (artistName, plays) ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = palette.surfaceElevated.copy(alpha = 0.7f),
+                                border = BorderStroke(1.dp, palette.border)
+                            ) {
+                                Text(
+                                    text = "$artistName • $plays",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.textPrimary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

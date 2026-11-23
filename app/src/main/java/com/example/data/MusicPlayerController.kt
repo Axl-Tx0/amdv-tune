@@ -8,6 +8,8 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import com.example.model.AudioEffectsState
+import com.example.model.EqualizerPreset
 import com.example.model.TrackUiModel
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +35,12 @@ data class PlaybackState(
     val autoContinueEnabled: Boolean = true,
     val muteOnNotificationsEnabled: Boolean = false,
     val isSilencedForNotification: Boolean = false,
+    val queue: List<TrackUiModel> = emptyList(),
+    val currentQueueIndex: Int = -1,
+    val sleepTimerRemainingMs: Long? = null,
+    val sleepAfterCurrentTrack: Boolean = false,
+    val crossfadeSeconds: Int = 0,
+    val audioEffects: AudioEffectsState = AudioEffectsState(),
     val errorMessage: String? = null
 )
 
@@ -54,9 +62,14 @@ class MusicPlayerController(private val context: Context) {
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
 
     private var mediaPlayer: MediaPlayer? = null
+    private var fadingOutPlayer: MediaPlayer? = null
+    private var crossfadeJob: Job? = null
+    private var crossfadeTriggeredForTrackId: String? = null
     private var tickerJob: Job? = null
     private var focusRestoreJob: Job? = null
+    private var sleepTimerJob: Job? = null
     private var transitionWakeLock: PowerManager.WakeLock? = null
+    private val audioEffectsManager = AudioEffectsManager()
 
     private var catalogQueue: List<TrackUiModel> = emptyList()
     private var activeQueue: List<TrackUiModel> = emptyList()
@@ -130,15 +143,24 @@ class MusicPlayerController(private val context: Context) {
             activeQueue = refreshed
         }
 
-        val active = _playbackState.value.currentTrack ?: return
-        val updatedActive = byId[active.id]
-        if (updatedActive != null) {
-            _playbackState.update { it.copy(currentTrack = updatedActive) }
+        val active = _playbackState.value.currentTrack
+        val updatedActive = active?.let { byId[it.id] ?: it }
+        val resolvedIdx = updatedActive?.let { cur -> activeQueue.indexOfFirst { it.id == cur.id } } ?: -1
+        _playbackState.update {
+            it.copy(
+                currentTrack = updatedActive ?: it.currentTrack,
+                queue = activeQueue,
+                currentQueueIndex = resolvedIdx
+            )
         }
     }
 
     fun playTrack(track: TrackUiModel, queue: List<TrackUiModel>) {
         activeQueue = queue.ifEmpty { catalogQueue.ifEmpty { listOf(track) } }
+        if (activeQueue.none { it.id == track.id }) {
+            activeQueue = listOf(track) + activeQueue
+        }
+        syncQueueState(track)
         consecutiveAutoAdvanceErrors = 0
         if (_playbackState.value.currentTrack?.id == track.id && mediaPlayer != null) {
             togglePlayPause()
@@ -147,9 +169,179 @@ class MusicPlayerController(private val context: Context) {
         startMediaPlayer(track, autoAdvance = false)
     }
 
-    private fun startMediaPlayer(track: TrackUiModel, autoAdvance: Boolean) {
+    private fun syncQueueState(activeTrack: TrackUiModel? = _playbackState.value.currentTrack) {
+        val idx = activeTrack?.let { cur -> activeQueue.indexOfFirst { it.id == cur.id } } ?: -1
+        _playbackState.update {
+            it.copy(
+                queue = activeQueue.toList(),
+                currentQueueIndex = idx
+            )
+        }
+    }
+
+    fun playNextInQueue(track: TrackUiModel) {
+        val current = _playbackState.value.currentTrack
+        if (current == null) {
+            playTrack(track, listOf(track))
+            return
+        }
+        if (current.id == track.id) return
+        val mutable = activeQueue.toMutableList()
+        mutable.removeAll { it.id == track.id }
+        val currentIdx = mutable.indexOfFirst { it.id == current.id }
+        val insertIdx = if (currentIdx >= 0) (currentIdx + 1).coerceAtMost(mutable.size) else 0
+        mutable.add(insertIdx, track)
+        activeQueue = mutable
+        syncQueueState(current)
+    }
+
+    fun addToQueueEnd(track: TrackUiModel) {
+        val current = _playbackState.value.currentTrack
+        if (current == null) {
+            playTrack(track, listOf(track))
+            return
+        }
+        val mutable = activeQueue.toMutableList()
+        if (mutable.none { it.id == track.id }) {
+            mutable.add(track)
+            activeQueue = mutable
+            syncQueueState(current)
+        }
+    }
+
+    fun removeFromQueue(index: Int) {
+        if (index !in activeQueue.indices) return
+        val target = activeQueue[index]
+        if (target.id == _playbackState.value.currentTrack?.id) return
+        val mutable = activeQueue.toMutableList()
+        mutable.removeAt(index)
+        activeQueue = mutable
+        syncQueueState()
+    }
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in activeQueue.indices || toIndex !in activeQueue.indices || fromIndex == toIndex) return
+        val mutable = activeQueue.toMutableList()
+        val item = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, item)
+        activeQueue = mutable
+        syncQueueState()
+    }
+
+    fun playQueueIndex(index: Int) {
+        if (index !in activeQueue.indices) return
+        val target = activeQueue[index]
+        consecutiveAutoAdvanceErrors = 0
+        startMediaPlayer(target, autoAdvance = false)
+    }
+
+    fun setSleepTimerMinutes(minutes: Int) {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        if (minutes <= 0) {
+            _playbackState.update { it.copy(sleepTimerRemainingMs = null, sleepAfterCurrentTrack = false) }
+            return
+        }
+        val totalMs = minutes * 60_000L
+        _playbackState.update {
+            it.copy(
+                sleepTimerRemainingMs = totalMs,
+                sleepAfterCurrentTrack = false
+            )
+        }
+        sleepTimerJob = scope.launch {
+            var remaining = totalMs
+            while (isActive && remaining > 0L) {
+                delay(1000L)
+                remaining = (remaining - 1000L).coerceAtLeast(0L)
+                _playbackState.update { it.copy(sleepTimerRemainingMs = if (remaining > 0L) remaining else null) }
+            }
+            if (isActive) {
+                pause()
+                _playbackState.update {
+                    it.copy(
+                        sleepTimerRemainingMs = null,
+                        sleepAfterCurrentTrack = false
+                    )
+                }
+            }
+        }
+    }
+
+    fun setSleepAfterCurrentTrack() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _playbackState.update {
+            it.copy(
+                sleepTimerRemainingMs = null,
+                sleepAfterCurrentTrack = true
+            )
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _playbackState.update {
+            it.copy(
+                sleepTimerRemainingMs = null,
+                sleepAfterCurrentTrack = false
+            )
+        }
+    }
+
+    fun applyPersistedAudioEffects(
+        enabled: Boolean,
+        preset: EqualizerPreset,
+        bandLevelsMb: List<Int>,
+        bassBoostStrength: Int
+    ) {
+        val next = audioEffectsManager.applyConfig(enabled, preset, bandLevelsMb, bassBoostStrength)
+        _playbackState.update { it.copy(audioEffects = next) }
+    }
+
+    fun setEqualizerEnabled(enabled: Boolean): AudioEffectsState {
+        val next = audioEffectsManager.setEnabled(enabled)
+        _playbackState.update { it.copy(audioEffects = next) }
+        return next
+    }
+
+    fun selectEqualizerPreset(preset: EqualizerPreset): AudioEffectsState {
+        val next = audioEffectsManager.selectPreset(preset)
+        _playbackState.update { it.copy(audioEffects = next) }
+        return next
+    }
+
+    fun setEqualizerBandLevel(bandIndex: Int, levelMb: Int): AudioEffectsState {
+        val next = audioEffectsManager.setBandLevel(bandIndex, levelMb)
+        _playbackState.update { it.copy(audioEffects = next) }
+        return next
+    }
+
+    fun setBassBoostStrength(strength: Int): AudioEffectsState {
+        val next = audioEffectsManager.setBassBoost(strength)
+        _playbackState.update { it.copy(audioEffects = next) }
+        return next
+    }
+
+    private fun startMediaPlayer(
+        track: TrackUiModel,
+        autoAdvance: Boolean,
+        crossfadeMs: Long = 0L
+    ) {
         acquireTransitionWakeLock()
-        releasePlayerOnly()
+        val outgoingPlayer = if (crossfadeMs > 0L && mediaPlayer != null) {
+            cancelFadingOutPlayer()
+            stopTicker()
+            audioEffectsManager.release()
+            val prev = mediaPlayer
+            mediaPlayer = null
+            prev
+        } else {
+            releasePlayerOnly()
+            null
+        }
+        crossfadeTriggeredForTrackId = null
         recentlyPlayedIds.add(track.id)
         if (recentlyPlayedIds.size > activeQueue.size.coerceAtLeast(1)) {
             recentlyPlayedIds.clear()
@@ -207,15 +399,34 @@ class MusicPlayerController(private val context: Context) {
                 if (mediaPlayer !== mp) return@setOnPreparedListener
                 consecutiveAutoAdvanceErrors = 0
                 requestAudioFocusIfNeeded()
-                applyEffectiveVolumeTo(mp)
-                mp.start()
+                val fxState = runCatching { audioEffectsManager.attachToSession(mp.audioSessionId) }
+                    .getOrElse { audioEffectsManager.getState() }
+
+                if (outgoingPlayer != null && crossfadeMs > 0L && !mutedByNotificationFocus) {
+                    fadingOutPlayer = outgoingPlayer
+                    runCatching { mp.setVolume(0.02f, 0.02f) }
+                    mp.start()
+                    runCrossfadeRamp(outgoingPlayer, mp, crossfadeMs)
+                } else {
+                    if (outgoingPlayer != null) {
+                        runCatching { outgoingPlayer.stop() }
+                        runCatching { outgoingPlayer.release() }
+                    }
+                    applyEffectiveVolumeTo(mp)
+                    mp.start()
+                }
+
                 val realDuration = mp.duration.toLong().coerceAtLeast(0L)
+                val queueIdx = activeQueue.indexOfFirst { it.id == track.id }
                 _playbackState.update {
                     it.copy(
                         isPlaying = true,
                         isTransitioning = false,
                         durationMs = if (realDuration > 0) realDuration else track.durationSec * 1000L,
                         positionMs = 0L,
+                        queue = activeQueue.toList(),
+                        currentQueueIndex = queueIdx,
+                        audioEffects = fxState,
                         errorMessage = null
                     )
                 }
@@ -255,6 +466,10 @@ class MusicPlayerController(private val context: Context) {
             player.prepareAsync()
         } catch (e: Exception) {
             releaseTransitionWakeLock()
+            if (outgoingPlayer != null) {
+                runCatching { outgoingPlayer.stop() }
+                runCatching { outgoingPlayer.release() }
+            }
             player.release()
             if (autoAdvance && consecutiveAutoAdvanceErrors < 2 && resolveAllPlayableTracks().size > 1) {
                 consecutiveAutoAdvanceErrors++
@@ -272,8 +487,56 @@ class MusicPlayerController(private val context: Context) {
         }
     }
 
+    private fun runCrossfadeRamp(outgoing: MediaPlayer, incoming: MediaPlayer, durationMs: Long) {
+        crossfadeJob?.cancel()
+        crossfadeJob = scope.launch {
+            val steps = (durationMs / 50L).coerceIn(10L, 240L).toInt()
+            val stepDelay = (durationMs / steps).coerceAtLeast(30L)
+            for (step in 1..steps) {
+                if (!isActive || mediaPlayer !== incoming) break
+                val fraction = step.toFloat() / steps.toFloat()
+                val master = if (mutedByNotificationFocus) 0f else 1f
+                runCatching { outgoing.setVolume((1f - fraction) * master, (1f - fraction) * master) }
+                runCatching { incoming.setVolume(fraction * master, fraction * master) }
+                delay(stepDelay)
+            }
+            runCatching { outgoing.stop() }
+            runCatching { outgoing.release() }
+            if (fadingOutPlayer === outgoing) {
+                fadingOutPlayer = null
+            }
+            if (mediaPlayer === incoming) {
+                applyEffectiveVolumeTo(incoming)
+            }
+        }
+    }
+
+    private fun cancelFadingOutPlayer() {
+        crossfadeJob?.cancel()
+        crossfadeJob = null
+        fadingOutPlayer?.let { old ->
+            runCatching { old.stop() }
+            runCatching { old.release() }
+        }
+        fadingOutPlayer = null
+    }
+
     private fun handleTrackCompleted(mp: MediaPlayer) {
         val state = _playbackState.value
+        if (state.sleepAfterCurrentTrack) {
+            stopTicker()
+            abandonAudioFocus()
+            _playbackState.update {
+                it.copy(
+                    isPlaying = false,
+                    isTransitioning = false,
+                    positionMs = it.durationMs,
+                    sleepAfterCurrentTrack = false
+                )
+            }
+            MusicPlaybackService.sync(appContext, isPlaying = false)
+            return
+        }
         if (state.repeatOneEnabled) {
             try {
                 mp.seekTo(0)
@@ -302,6 +565,7 @@ class MusicPlayerController(private val context: Context) {
     }
 
     private fun pauseInternal(abandonFocus: Boolean, markSilenced: Boolean) {
+        cancelFadingOutPlayer()
         val player = mediaPlayer ?: return
         try {
             if (player.isPlaying) {
@@ -381,7 +645,7 @@ class MusicPlayerController(private val context: Context) {
         }
     }
 
-    fun playNext(autoAdvance: Boolean = false) {
+    fun playNext(autoAdvance: Boolean = false, crossfadeMs: Long = 0L) {
         val queue = resolvePlayableQueueForNext()
         if (queue.isEmpty()) return
         val current = _playbackState.value.currentTrack
@@ -412,7 +676,7 @@ class MusicPlayerController(private val context: Context) {
         if (!autoAdvance) {
             consecutiveAutoAdvanceErrors = 0
         }
-        startMediaPlayer(nextTrack, autoAdvance = autoAdvance)
+        startMediaPlayer(nextTrack, autoAdvance = autoAdvance, crossfadeMs = crossfadeMs)
     }
 
     private fun resolvePlayableQueueForNext(): List<TrackUiModel> {
@@ -455,6 +719,10 @@ class MusicPlayerController(private val context: Context) {
 
     fun setAutoContinueEnabled(enabled: Boolean) {
         _playbackState.update { it.copy(autoContinueEnabled = enabled) }
+    }
+
+    fun setCrossfadeSeconds(seconds: Int) {
+        _playbackState.update { it.copy(crossfadeSeconds = seconds.coerceIn(0, 12)) }
     }
 
     fun setMuteOnNotificationsEnabled(enabled: Boolean) {
@@ -594,6 +862,24 @@ class MusicPlayerController(private val context: Context) {
                             .getOrDefault(_playbackState.value.durationMs)
                             .coerceAtLeast(_playbackState.value.durationMs)
                         _playbackState.update { it.copy(positionMs = pos, durationMs = dur) }
+
+                        val st = _playbackState.value
+                        val cfMs = st.crossfadeSeconds * 1000L
+                        val curTrackId = st.currentTrack?.id
+                        if (cfMs > 0L &&
+                            curTrackId != null &&
+                            crossfadeTriggeredForTrackId != curTrackId &&
+                            st.autoContinueEnabled &&
+                            !st.repeatOneEnabled &&
+                            !st.sleepAfterCurrentTrack &&
+                            dur > cfMs + 3_000L &&
+                            (dur - pos) in 400L..cfMs &&
+                            resolvePlayableQueueForNext().size > 1
+                        ) {
+                            crossfadeTriggeredForTrackId = curTrackId
+                            playNext(autoAdvance = true, crossfadeMs = (dur - pos).coerceIn(1_000L, cfMs))
+                            break
+                        }
                     } else if (_playbackState.value.isPlaying && !_playbackState.value.isTransitioning) {
                         // Safeguard for HTTP streams that hit EOF without firing OnCompletionListener
                         val pos = runCatching { player.currentPosition.toLong() }.getOrDefault(0L)
@@ -615,7 +901,9 @@ class MusicPlayerController(private val context: Context) {
     }
 
     private fun releasePlayerOnly() {
+        cancelFadingOutPlayer()
         stopTicker()
+        audioEffectsManager.release()
         try {
             mediaPlayer?.stop()
         } catch (_: Exception) {
@@ -629,6 +917,7 @@ class MusicPlayerController(private val context: Context) {
 
     fun release() {
         focusRestoreJob?.cancel()
+        sleepTimerJob?.cancel()
         releaseTransitionWakeLock()
         releasePlayerOnly()
         abandonAudioFocus()

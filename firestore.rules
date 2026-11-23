@@ -23,6 +23,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidShareCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -46,6 +50,15 @@ service cloud.firestore {
              data.durationSec is int && data.durationSec >= 0 && data.durationSec <= 86400 &&
              data.favorite is bool &&
              data.sourceType is string && data.sourceType in ['BUNDLED', 'LOCAL', 'CLOUD'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidUserPlaylist(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.description is string && data.description.size() <= 200 &&
+             data.trackIds is list && data.trackIds.size() <= 500 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -133,6 +146,60 @@ service cloud.firestore {
                          );
 
         allow delete: if isOwner(userId) && isValidId(trackId);
+      }
+
+      match /playlists/{playlistId} {
+        allow get: if isOwner(userId) && isValidId(playlistId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(playlistId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'description', 'trackIds', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'description', 'trackIds', 'createdAt', 'updatedAt']) &&
+                         isValidUserPlaylist(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(playlistId) &&
+                         isValidUserPlaylist(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'trackIds', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(playlistId);
+      }
+
+      match /reactions/{trackId} {
+        allow get: if isOwner(userId) && isValidId(trackId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(trackId) &&
+                         incoming().keys().hasAll(['userId', 'trackId', 'fire', 'heart', 'headphones', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'trackId', 'fire', 'heart', 'headphones', 'updatedAt']) &&
+                         isValidUserTrackReaction(incoming(), userId, trackId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(trackId) &&
+                         isValidUserTrackReaction(incoming(), userId, trackId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().trackId == existing().trackId &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['fire', 'heart', 'headphones', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(trackId);
+      }
+
+      match /followed_artists/{artistId} {
+        allow get: if isOwner(userId) && isValidId(artistId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(artistId) &&
+                         incoming().keys().hasAll(['userId', 'artistId', 'artistName', 'followedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'artistId', 'artistName', 'followedAt']) &&
+                         isValidUserArtistFollow(incoming(), userId, artistId);
+
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(artistId);
       }
     }
 
@@ -231,6 +298,197 @@ service cloud.firestore {
                                isValidAppReleaseConfig(incoming());
 
       allow delete: if isCatalogAdmin() && configId == 'release';
+    }
+
+    function isValidUserTrackReaction(data, userId, trackId) {
+      return data.userId is string && data.userId == userId &&
+             data.trackId is string && data.trackId == trackId &&
+             data.fire is bool &&
+             data.heart is bool &&
+             data.headphones is bool &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCommunityTrackStats(data, trackId) {
+      return data.trackId is string && data.trackId == trackId &&
+             data.playCount is int && data.playCount >= 0 && data.playCount <= 10000000 &&
+             data.fireCount is int && data.fireCount >= 0 && data.fireCount <= 10000000 &&
+             data.heartCount is int && data.heartCount >= 0 && data.heartCount <= 10000000 &&
+             data.headphonesCount is int && data.headphonesCount >= 0 && data.headphonesCount <= 10000000 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidJamSession(data, roomCode) {
+      return data.roomCode is string && data.roomCode == roomCode &&
+             data.hostUserId is string && data.hostUserId.size() >= 1 && data.hostUserId.size() <= 128 &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 100 &&
+             data.currentTrackId is string && data.currentTrackId.size() <= 128 &&
+             data.playing is bool &&
+             data.positionMs is int && data.positionMs >= 0 && data.positionMs <= 86400000 &&
+             data.queueTrackIds is list && data.queueTrackIds.size() <= 100 &&
+             data.active is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidSharedPlaylist(data, shareCode) {
+      return data.shareCode is string && data.shareCode == shareCode &&
+             data.ownerUserId is string && data.ownerUserId.size() >= 1 && data.ownerUserId.size() <= 128 &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 100 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.description is string && data.description.size() <= 200 &&
+             data.trackIds is list && data.trackIds.size() <= 500 &&
+             data.collaborative is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /community_stats/{trackId} {
+      allow get: if isSignedIn() && isValidId(trackId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(trackId) &&
+                       incoming().keys().hasAll(['trackId', 'playCount', 'fireCount', 'heartCount', 'headphonesCount', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['trackId', 'playCount', 'fireCount', 'heartCount', 'headphonesCount', 'updatedAt']) &&
+                       isValidCommunityTrackStats(incoming(), trackId) &&
+                       incoming().playCount <= 1 &&
+                       incoming().fireCount <= 1 &&
+                       incoming().heartCount <= 1 &&
+                       incoming().headphonesCount <= 1;
+
+      allow update: if isSignedIn() &&
+                       isValidId(trackId) &&
+                       isValidCommunityTrackStats(incoming(), trackId) &&
+                       incoming().trackId == existing().trackId &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['playCount', 'fireCount', 'heartCount', 'headphonesCount', 'updatedAt']) &&
+                       incoming().playCount >= existing().playCount &&
+                       incoming().playCount <= existing().playCount + 1 &&
+                       incoming().fireCount >= existing().fireCount - 1 &&
+                       incoming().fireCount <= existing().fireCount + 1 &&
+                       incoming().heartCount >= existing().heartCount - 1 &&
+                       incoming().heartCount <= existing().heartCount + 1 &&
+                       incoming().headphonesCount >= existing().headphonesCount - 1 &&
+                       incoming().headphonesCount <= existing().headphonesCount + 1;
+
+      allow delete: if isCatalogAdmin() && isValidId(trackId);
+    }
+
+    match /jam_sessions/{roomCode} {
+      allow get: if isSignedIn() && isValidShareCode(roomCode);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidShareCode(roomCode) &&
+                       incoming().keys().hasAll(['roomCode', 'hostUserId', 'hostName', 'currentTrackId', 'playing', 'positionMs', 'queueTrackIds', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['roomCode', 'hostUserId', 'hostName', 'currentTrackId', 'playing', 'positionMs', 'queueTrackIds', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().hostUserId == request.auth.uid &&
+                       isValidJamSession(incoming(), roomCode);
+
+      allow update: if isSignedIn() &&
+                       isValidShareCode(roomCode) &&
+                       isValidJamSession(incoming(), roomCode) &&
+                       incoming().roomCode == existing().roomCode &&
+                       incoming().hostUserId == existing().hostUserId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (existing().hostUserId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['currentTrackId', 'playing', 'positionMs', 'queueTrackIds', 'active', 'updatedAt'])) ||
+                         (existing().active == true &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['queueTrackIds', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && isValidShareCode(roomCode) && existing().hostUserId == request.auth.uid;
+    }
+
+    match /shared_playlists/{shareCode} {
+      allow get: if isSignedIn() && isValidShareCode(shareCode);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidShareCode(shareCode) &&
+                       incoming().keys().hasAll(['shareCode', 'ownerUserId', 'ownerName', 'name', 'description', 'trackIds', 'collaborative', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['shareCode', 'ownerUserId', 'ownerName', 'name', 'description', 'trackIds', 'collaborative', 'createdAt', 'updatedAt']) &&
+                       incoming().ownerUserId == request.auth.uid &&
+                       isValidSharedPlaylist(incoming(), shareCode);
+
+      allow update: if isSignedIn() &&
+                       isValidShareCode(shareCode) &&
+                       isValidSharedPlaylist(incoming(), shareCode) &&
+                       incoming().shareCode == existing().shareCode &&
+                       incoming().ownerUserId == existing().ownerUserId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (existing().ownerUserId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'trackIds', 'collaborative', 'updatedAt'])) ||
+                         (existing().collaborative == true &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['trackIds', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && isValidShareCode(shareCode) && existing().ownerUserId == request.auth.uid;
+    }
+
+    function isValidUserArtistFollow(data, userId, artistId) {
+      return data.userId is string && data.userId == userId &&
+             data.artistId is string && data.artistId == artistId &&
+             data.artistName is string && data.artistName.size() >= 1 && data.artistName.size() <= 100 &&
+             data.followedAt is timestamp && data.followedAt <= request.time;
+    }
+
+    function isValidArtistStats(data, artistId) {
+      return data.artistId is string && data.artistId == artistId &&
+             data.followerCount is int && data.followerCount >= 0 && data.followerCount <= 10000000 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTrackComment(data) {
+      return data.trackId is string && isValidId(data.trackId) &&
+             data.trackTitle is string && data.trackTitle.size() >= 1 && data.trackTitle.size() <= 120 &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 100 &&
+             data.timestampMs is int && data.timestampMs >= 0 && data.timestampMs <= 86400000 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 220 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    match /artist_stats/{artistId} {
+      allow get: if isSignedIn() && isValidId(artistId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(artistId) &&
+                       incoming().keys().hasAll(['artistId', 'followerCount', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['artistId', 'followerCount', 'updatedAt']) &&
+                       isValidArtistStats(incoming(), artistId) &&
+                       incoming().followerCount <= 1;
+
+      allow update: if isSignedIn() &&
+                       isValidId(artistId) &&
+                       isValidArtistStats(incoming(), artistId) &&
+                       incoming().artistId == existing().artistId &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['followerCount', 'updatedAt']) &&
+                       incoming().followerCount >= existing().followerCount - 1 &&
+                       incoming().followerCount <= existing().followerCount + 1;
+
+      allow delete: if isCatalogAdmin() && isValidId(artistId);
+    }
+
+    match /track_comments/{commentId} {
+      allow get: if isSignedIn() && isValidId(commentId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(commentId) &&
+                       incoming().keys().hasAll(['trackId', 'trackTitle', 'userId', 'authorName', 'timestampMs', 'text', 'createdAt']) &&
+                       incoming().keys().hasOnly(['trackId', 'trackTitle', 'userId', 'authorName', 'timestampMs', 'text', 'createdAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       isValidTrackComment(incoming());
+
+      allow update: if false;
+
+      allow delete: if isSignedIn() &&
+                       isValidId(commentId) &&
+                       (existing().userId == request.auth.uid || isCatalogAdmin());
     }
   }
 }

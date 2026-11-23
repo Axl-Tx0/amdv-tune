@@ -128,36 +128,51 @@ class OfflineDownloadManager(
             return
         }
 
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 30000
-            instanceFollowRedirects = true
-        }
-        try {
-            conn.connect()
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                throw IllegalStateException("HTTP $code")
+        var currentUrl = url
+        var hops = 0
+        while (hops < 5) {
+            val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 30000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "AMDV-TUNE/1.5")
             }
-            val total = conn.contentLengthLong
-            conn.inputStream.use { input ->
-                FileOutputStream(destFile).use { output ->
-                    val buf = ByteArray(8192)
-                    var readTotal = 0L
-                    while (true) {
-                        val read = input.read(buf)
-                        if (read <= 0) break
-                        output.write(buf, 0, read)
-                        readTotal += read
-                        if (total > 0) {
-                            onProgress((readTotal.toFloat() / total.toFloat()).coerceIn(0f, 1f))
-                        }
+            try {
+                conn.connect()
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val location = conn.getHeaderField("Location")
+                    if (!location.isNullOrBlank()) {
+                        currentUrl = location
+                        hops++
+                        continue
                     }
-                    output.flush()
                 }
+                if (code !in 200..299) {
+                    throw IllegalStateException("HTTP $code")
+                }
+                val total = conn.contentLengthLong
+                conn.inputStream.use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        val buf = ByteArray(8192)
+                        var readTotal = 0L
+                        while (true) {
+                            val read = input.read(buf)
+                            if (read <= 0) break
+                            output.write(buf, 0, read)
+                            readTotal += read
+                            if (total > 0) {
+                                onProgress((readTotal.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+                return
+            } finally {
+                conn.disconnect()
             }
-        } finally {
-            conn.disconnect()
         }
+        throw IllegalStateException("Demasiadas redirecciones al descargar")
     }
 }

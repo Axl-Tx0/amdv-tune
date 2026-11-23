@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -15,6 +16,9 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -41,12 +45,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
@@ -54,12 +66,14 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -88,6 +102,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -99,10 +115,15 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.LrcParser
 import com.example.data.PlaybackState
+import com.example.model.CommunityTrackStats
+import com.example.model.JamSession
+import com.example.model.TrackComment
 import com.example.model.TrackUiModel
+import com.example.model.UserTrackReaction
 import com.example.ui.theme.HeartPink
 import com.example.ui.theme.LocalAmdvPalette
 import com.example.ui.theme.OrbitronFontFamily
+import kotlinx.coroutines.delay
 
 @Composable
 fun FullScreenPlayerOverlay(
@@ -110,6 +131,11 @@ fun FullScreenPlayerOverlay(
     playbackState: PlaybackState,
     isLyricsLoading: Boolean = false,
     lyricsStatusMessage: String? = null,
+    lyricsOffsetMs: Long = 0L,
+    communityStats: CommunityTrackStats? = null,
+    userReaction: UserTrackReaction? = null,
+    activeJam: JamSession? = null,
+    trackComments: List<TrackComment> = emptyList(),
     onCollapse: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -122,7 +148,18 @@ fun FullScreenPlayerOverlay(
     onDownloadTrack: (String) -> Unit,
     onRemoveDownload: (String) -> Unit,
     onEditLyrics: (TrackUiModel) -> Unit,
-    onRequestAutoLyrics: (TrackUiModel, Boolean) -> Unit = { _, _ -> }
+    onRequestAutoLyrics: (TrackUiModel, Boolean) -> Unit = { _, _ -> },
+    onAdjustLyricsOffset: (String, Long) -> Unit = { _, _ -> },
+    onResetLyricsOffset: (String) -> Unit = {},
+    onToggleReaction: (String, String) -> Unit = { _, _ -> },
+    onOpenJamSheet: () -> Unit = {},
+    onOpenComments: () -> Unit = {},
+    onOpenDrivingMode: () -> Unit = {},
+    onOpenArtist: (TrackUiModel) -> Unit = {},
+    onAddToPlaylist: (TrackUiModel) -> Unit = {},
+    onOpenQueue: () -> Unit = {},
+    onOpenEqualizer: () -> Unit = {},
+    onOpenSleepTimer: () -> Unit = {}
 ) {
     val track = playbackState.currentTrack
 
@@ -147,6 +184,11 @@ fun FullScreenPlayerOverlay(
                 playbackState = playbackState,
                 isLyricsLoading = isLyricsLoading,
                 lyricsStatusMessage = lyricsStatusMessage,
+                lyricsOffsetMs = lyricsOffsetMs,
+                communityStats = communityStats,
+                userReaction = userReaction,
+                activeJam = activeJam,
+                trackComments = trackComments,
                 onCollapse = onCollapse,
                 onPlayPause = onPlayPause,
                 onNext = onNext,
@@ -159,7 +201,18 @@ fun FullScreenPlayerOverlay(
                 onDownloadTrack = { onDownloadTrack(track.id) },
                 onRemoveDownload = { onRemoveDownload(track.id) },
                 onEditLyrics = { onEditLyrics(track) },
-                onRequestAutoLyrics = { force -> onRequestAutoLyrics(track, force) }
+                onRequestAutoLyrics = { force -> onRequestAutoLyrics(track, force) },
+                onAdjustLyricsOffset = { delta -> onAdjustLyricsOffset(track.id, delta) },
+                onResetLyricsOffset = { onResetLyricsOffset(track.id) },
+                onToggleReaction = { type -> onToggleReaction(track.id, type) },
+                onOpenJamSheet = onOpenJamSheet,
+                onOpenComments = onOpenComments,
+                onOpenDrivingMode = onOpenDrivingMode,
+                onOpenArtist = { onOpenArtist(track) },
+                onAddToPlaylist = { onAddToPlaylist(track) },
+                onOpenQueue = onOpenQueue,
+                onOpenEqualizer = onOpenEqualizer,
+                onOpenSleepTimer = onOpenSleepTimer
             )
         }
     }
@@ -171,6 +224,11 @@ private fun FullScreenPlayerContent(
     playbackState: PlaybackState,
     isLyricsLoading: Boolean,
     lyricsStatusMessage: String?,
+    lyricsOffsetMs: Long,
+    communityStats: CommunityTrackStats?,
+    userReaction: UserTrackReaction?,
+    activeJam: JamSession?,
+    trackComments: List<TrackComment>,
     onCollapse: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -183,10 +241,33 @@ private fun FullScreenPlayerContent(
     onDownloadTrack: () -> Unit,
     onRemoveDownload: () -> Unit,
     onEditLyrics: () -> Unit,
-    onRequestAutoLyrics: (Boolean) -> Unit
+    onRequestAutoLyrics: (Boolean) -> Unit,
+    onAdjustLyricsOffset: (Long) -> Unit,
+    onResetLyricsOffset: () -> Unit,
+    onToggleReaction: (String) -> Unit,
+    onOpenJamSheet: () -> Unit,
+    onOpenComments: () -> Unit,
+    onOpenDrivingMode: () -> Unit,
+    onOpenArtist: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenEqualizer: () -> Unit,
+    onOpenSleepTimer: () -> Unit
 ) {
+    val context = LocalContext.current
     val palette = LocalAmdvPalette.current
     var showLyricsView by remember(track.id) { mutableStateOf(false) }
+    var showKaraokeMode by remember(track.id) { mutableStateOf(false) }
+    var showLyricCardStudio by remember(track.id) { mutableStateOf(false) }
+    var showVisualizer by remember { mutableStateOf(true) }
+    var showHeartBurst by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showHeartBurst) {
+        if (showHeartBurst) {
+            delay(750L)
+            showHeartBurst = false
+        }
+    }
 
     val durationMs = playbackState.durationMs.coerceAtLeast(track.durationSec * 1000L).coerceAtLeast(1000L)
     var isDragging by remember(track.id) { mutableStateOf(false) }
@@ -213,15 +294,34 @@ private fun FullScreenPlayerContent(
         label = "art_scale"
     )
 
+    var rawCoverAccent by remember { mutableStateOf(palette.accent) }
+    LaunchedEffect(track.coverKey, palette.accent) {
+        rawCoverAccent = CoverColorExtractor.extractAccentColor(
+            context = context,
+            coverKey = track.coverKey,
+            fallback = palette.accent
+        )
+    }
+    val dynamicCoverAccent by animateColorAsState(
+        targetValue = rawCoverAccent,
+        animationSpec = tween(durationMillis = 550),
+        label = "dynamic_cover_accent"
+    )
+
     val topGlowColor = if (palette.isDark) {
-        palette.accent.copy(alpha = 0.22f)
+        dynamicCoverAccent.copy(alpha = 0.42f)
     } else {
-        palette.accent.copy(alpha = 0.14f)
+        dynamicCoverAccent.copy(alpha = 0.22f)
+    }
+    val midGlowColor = if (palette.isDark) {
+        dynamicCoverAccent.copy(alpha = 0.16f)
+    } else {
+        dynamicCoverAccent.copy(alpha = 0.08f)
     }
     val secondaryGlowColor = if (palette.isDark) {
-        palette.secondaryAccent.copy(alpha = 0.16f)
+        dynamicCoverAccent.copy(alpha = 0.28f)
     } else {
-        palette.secondaryAccent.copy(alpha = 0.08f)
+        dynamicCoverAccent.copy(alpha = 0.12f)
     }
 
     Box(
@@ -233,7 +333,8 @@ private fun FullScreenPlayerContent(
                     brush = Brush.verticalGradient(
                         colors = listOf(
                             topGlowColor,
-                            palette.background.copy(alpha = 0.92f),
+                            midGlowColor,
+                            palette.background.copy(alpha = 0.96f),
                             palette.background
                         )
                     )
@@ -241,11 +342,11 @@ private fun FullScreenPlayerContent(
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(secondaryGlowColor, Color.Transparent),
-                        center = Offset(size.width * 0.82f, size.height * 0.22f),
-                        radius = size.width * 0.85f
+                        center = Offset(size.width * 0.80f, size.height * 0.24f),
+                        radius = size.width * 0.90f
                     ),
-                    center = Offset(size.width * 0.82f, size.height * 0.22f),
-                    radius = size.width * 0.85f
+                    center = Offset(size.width * 0.80f, size.height * 0.24f),
+                    radius = size.width * 0.90f
                 )
             }
             .clickable(enabled = true, onClick = {}) // Consumes clicks so background list cannot be tapped through
@@ -268,10 +369,26 @@ private fun FullScreenPlayerContent(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 1. Top Header Bar
+                // 1. Top Header Bar (drag down to collapse)
+                var headerDragTotal by remember { mutableFloatStateOf(0f) }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragStart = { headerDragTotal = 0f },
+                                onVerticalDrag = { _, dragAmount ->
+                                    headerDragTotal += dragAmount
+                                },
+                                onDragEnd = {
+                                    if (headerDragTotal > 110f) {
+                                        onCollapse()
+                                    }
+                                    headerDragTotal = 0f
+                                }
+                            )
+                        }
                 ) {
                     IconButton(
                         onClick = onCollapse,
@@ -292,7 +409,7 @@ private fun FullScreenPlayerContent(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = "REPRODUCIENDO AHORA",
+                            text = if (activeJam != null) "JAM • ${activeJam.roomCode}" else "REPRODUCIENDO AHORA",
                             fontFamily = OrbitronFontFamily,
                             fontSize = 11.sp,
                             letterSpacing = 1.6.sp,
@@ -313,6 +430,34 @@ private fun FullScreenPlayerContent(
                     }
 
                     IconButton(
+                        onClick = onOpenDrivingMode,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_driving_mode_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DirectionsCar,
+                            contentDescription = "Modo conducción",
+                            tint = palette.textPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onOpenJamSheet,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_jam_top_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Podcasts,
+                            contentDescription = "Jam en vivo",
+                            tint = if (activeJam != null) palette.accent else palette.textPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    IconButton(
                         onClick = { showLyricsView = !showLyricsView },
                         modifier = Modifier
                             .minimumInteractiveComponentSize()
@@ -327,9 +472,9 @@ private fun FullScreenPlayerContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // 2. Hero Artwork OR Scrollable Lyrics Area
+                // 2. Hero Artwork (Swipe L/R next/prev, double-tap favorite, audio visualizer) OR Scrollable Lyrics Area
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -344,77 +489,182 @@ private fun FullScreenPlayerContent(
                         label = "player_center_content"
                     ) { showingLyrics ->
                         if (!showingLyrics) {
+                            var horizontalDragAccum by remember(track.id) { mutableFloatStateOf(0f) }
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(24.dp),
-                                    color = palette.surfaceElevated,
-                                    border = BorderStroke(
-                                        width = 1.5.dp,
-                                        color = palette.accent.copy(alpha = if (playbackState.isPlaying) 0.55f else 0.25f)
-                                    ),
-                                    shadowElevation = 18.dp,
+                                Box(
+                                    contentAlignment = Alignment.Center,
                                     modifier = Modifier
                                         .size(coverSize)
                                         .scale(artScale)
+                                        .pointerInput(track.id) {
+                                            detectHorizontalDragGestures(
+                                                onDragStart = { horizontalDragAccum = 0f },
+                                                onHorizontalDrag = { _, dragAmount ->
+                                                    horizontalDragAccum += dragAmount
+                                                },
+                                                onDragEnd = {
+                                                    if (horizontalDragAccum < -90f) {
+                                                        onNext()
+                                                    } else if (horizontalDragAccum > 90f) {
+                                                        onPrevious()
+                                                    }
+                                                    horizontalDragAccum = 0f
+                                                }
+                                            )
+                                        }
+                                        .pointerInput(track.id) {
+                                            detectTapGestures(
+                                                onDoubleTap = {
+                                                    showHeartBurst = true
+                                                    onToggleFavorite()
+                                                }
+                                            )
+                                        }
                                 ) {
-                                    TrackCoverArt(
-                                        coverKey = track.coverKey,
-                                        title = track.title,
-                                        size = coverSize,
-                                        cornerRadius = 24.dp
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = palette.surfaceElevated,
+                                        border = BorderStroke(
+                                            width = 1.5.dp,
+                                            color = dynamicCoverAccent.copy(alpha = if (playbackState.isPlaying) 0.72f else 0.35f)
+                                        ),
+                                        shadowElevation = 18.dp,
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        TrackCoverArt(
+                                            coverKey = track.coverKey,
+                                            title = track.title,
+                                            size = coverSize,
+                                            cornerRadius = 24.dp
+                                        )
+                                    }
+
+                                    // Double-tap heart burst animation
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = showHeartBurst,
+                                        enter = fadeIn(tween(120)),
+                                        exit = fadeOut(tween(350))
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier
+                                                .size(86.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.55f))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Favorite,
+                                                contentDescription = null,
+                                                tint = HeartPink,
+                                                modifier = Modifier.size(50.dp)
+                                            )
+                                        }
+                                    }
+
+                                    // Floating SoundCloud-style timed comment pill over cover art
+                                    FloatingTimedCommentBanner(
+                                        comments = trackComments,
+                                        positionMs = playbackState.positionMs,
+                                        onClick = onOpenComments,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .padding(horizontal = 10.dp, vertical = 10.dp)
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
-                                // Source / Offline status pill
-                                Surface(
-                                    shape = RoundedCornerShape(20.dp),
-                                    color = palette.surfaceElevated.copy(alpha = 0.72f),
-                                    border = BorderStroke(1.dp, palette.border)
+                                // Reactive Audio Spectrum Visualizer
+                                if (showVisualizer) {
+                                    ReactiveAudioVisualizer(
+                                        isPlaying = playbackState.isPlaying,
+                                        accentColor = dynamicCoverAccent,
+                                        secondaryColor = palette.secondaryAccent,
+                                        bandLevelsMb = playbackState.audioEffects.bands.map { it.levelMb },
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.84f)
+                                            .height(26.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable { showVisualizer = false }
+                                            .testTag("player_audio_visualizer")
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                }
+
+                                // Source / Offline status pill + visualizer toggle
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                    Surface(
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = palette.surfaceElevated.copy(alpha = 0.72f),
+                                        border = BorderStroke(1.dp, palette.border)
                                     ) {
-                                        val badgeIcon = when {
-                                            playbackState.isSilencedForNotification -> Icons.Filled.NotificationsOff
-                                            track.isDownloaded -> Icons.Filled.DownloadDone
-                                            track.isCloudCatalog -> Icons.Filled.CloudDone
-                                            else -> Icons.Filled.MusicNote
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                        ) {
+                                            val badgeIcon = when {
+                                                playbackState.isSilencedForNotification -> Icons.Filled.NotificationsOff
+                                                track.isDownloaded -> Icons.Filled.DownloadDone
+                                                track.isCloudCatalog -> Icons.Filled.CloudDone
+                                                else -> Icons.Filled.MusicNote
+                                            }
+                                            val badgeLabel = when {
+                                                playbackState.isSilencedForNotification -> "Silenciado por notificación"
+                                                track.isDownloaded -> "Disponible offline"
+                                                track.isCloudCatalog -> "Catálogo en la nube"
+                                                else -> "Biblioteca local"
+                                            }
+                                            Icon(
+                                                imageVector = badgeIcon,
+                                                contentDescription = null,
+                                                tint = if (playbackState.isSilencedForNotification) palette.secondaryAccent else palette.accent,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = badgeLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (playbackState.isSilencedForNotification) palette.secondaryAccent else palette.textSecondary
+                                            )
                                         }
-                                        val badgeLabel = when {
-                                            playbackState.isSilencedForNotification -> "Silenciado por notificación"
-                                            track.isDownloaded -> "Disponible offline"
-                                            track.isCloudCatalog -> "Catálogo en la nube"
-                                            else -> "Biblioteca local"
+                                    }
+
+                                    Surface(
+                                        onClick = { showVisualizer = !showVisualizer },
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = if (showVisualizer) dynamicCoverAccent.copy(alpha = 0.16f) else palette.surfaceElevated.copy(alpha = 0.72f),
+                                        border = BorderStroke(1.dp, if (showVisualizer) dynamicCoverAccent else palette.border),
+                                        modifier = Modifier.testTag("player_visualizer_toggle_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.GraphicEq,
+                                                contentDescription = "Visualizador de audio",
+                                                tint = if (showVisualizer) dynamicCoverAccent else palette.textSecondary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
                                         }
-                                        Icon(
-                                            imageVector = badgeIcon,
-                                            contentDescription = null,
-                                            tint = if (playbackState.isSilencedForNotification) palette.secondaryAccent else palette.accent,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = badgeLabel,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (playbackState.isSilencedForNotification) palette.secondaryAccent else palette.textSecondary
-                                        )
                                     }
                                 }
                             }
                         } else {
-                            // Full Lyrics Panel inside Full-Screen Player (LRCLIB synced karaoke + plain fallback)
+                            // Full Lyrics Panel inside Full-Screen Player (LRCLIB synced karaoke + fine sync offset + plain fallback)
                             val syncedLines = remember(track.lyrics) {
                                 LrcParser.parseSyncedLyrics(track.lyrics)
                             }
-                            val activeLineIndex = remember(syncedLines, displayedPositionMs) {
-                                LrcParser.findActiveLineIndex(syncedLines, displayedPositionMs)
+                            val effectivePositionMs = (displayedPositionMs + lyricsOffsetMs).coerceAtLeast(0L)
+                            val activeLineIndex = remember(syncedLines, effectivePositionMs) {
+                                LrcParser.findActiveLineIndex(syncedLines, effectivePositionMs)
                             }
                             val lyricsListState = rememberLazyListState()
 
@@ -473,6 +723,34 @@ private fun FullScreenPlayerContent(
                                         }
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (track.lyrics.isNotBlank()) {
+                                                IconButton(
+                                                    onClick = { showLyricCardStudio = true },
+                                                    modifier = Modifier
+                                                        .minimumInteractiveComponentSize()
+                                                        .testTag("player_lyric_card_btn")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.AutoAwesome,
+                                                        contentDescription = "Crear tarjeta de letra para compartir",
+                                                        tint = palette.accent,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = { showKaraokeMode = true },
+                                                    modifier = Modifier
+                                                        .minimumInteractiveComponentSize()
+                                                        .testTag("player_open_karaoke_btn")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Fullscreen,
+                                                        contentDescription = "Modo Karaoke pantalla completa",
+                                                        tint = palette.accent,
+                                                        modifier = Modifier.size(22.dp)
+                                                    )
+                                                }
+                                            }
                                             IconButton(
                                                 onClick = { onRequestAutoLyrics(true) },
                                                 enabled = !isLyricsLoading,
@@ -507,6 +785,15 @@ private fun FullScreenPlayerContent(
                                                 )
                                             }
                                         }
+                                    }
+
+                                    if (syncedLines.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        LyricsSyncOffsetBar(
+                                            offsetMs = lyricsOffsetMs,
+                                            onAdjustOffset = onAdjustLyricsOffset,
+                                            onResetOffset = onResetLyricsOffset
+                                        )
                                     }
 
                                     Spacer(modifier = Modifier.height(6.dp))
@@ -568,7 +855,9 @@ private fun FullScreenPlayerContent(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
                                                             .clip(RoundedCornerShape(14.dp))
-                                                            .clickable { onSeekTo(line.timeMs) }
+                                                            .clickable {
+                                                                onSeekTo((line.timeMs - lyricsOffsetMs).coerceAtLeast(0L))
+                                                            }
                                                     ) {
                                                         Text(
                                                             text = line.text,
@@ -691,7 +980,11 @@ private fun FullScreenPlayerContent(
                             style = MaterialTheme.typography.titleMedium,
                             color = palette.textSecondary,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(onClick = onOpenArtist)
+                                .testTag("player_artist_link")
                         )
                     }
 
@@ -729,6 +1022,20 @@ private fun FullScreenPlayerContent(
                     }
 
                     IconButton(
+                        onClick = onAddToPlaylist,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("player_add_playlist_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                            contentDescription = "Añadir a playlist",
+                            tint = palette.textPrimary.copy(alpha = 0.85f),
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+
+                    IconButton(
                         onClick = onToggleFavorite,
                         modifier = Modifier
                             .minimumInteractiveComponentSize()
@@ -743,7 +1050,64 @@ private fun FullScreenPlayerContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // 3b. Community Quick Reactions Row (🔥 ❤️ 🎧)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    ReactionPill(
+                        emoji = "🔥",
+                        count = communityStats?.fireCount ?: 0L,
+                        active = userReaction?.fire == true,
+                        onClick = { onToggleReaction("fire") },
+                        testTag = "player_react_fire_btn"
+                    )
+                    ReactionPill(
+                        emoji = "❤️",
+                        count = communityStats?.heartCount ?: 0L,
+                        active = userReaction?.heart == true,
+                        onClick = { onToggleReaction("heart") },
+                        testTag = "player_react_heart_btn"
+                    )
+                    ReactionPill(
+                        emoji = "🎧",
+                        count = communityStats?.headphonesCount ?: 0L,
+                        active = userReaction?.headphones == true,
+                        onClick = { onToggleReaction("headphones") },
+                        testTag = "player_react_headphones_btn"
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Surface(
+                        onClick = onOpenComments,
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (trackComments.isNotEmpty()) palette.accent.copy(alpha = 0.16f) else palette.surfaceElevated.copy(alpha = 0.65f),
+                        border = BorderStroke(1.dp, if (trackComments.isNotEmpty()) palette.accent.copy(alpha = 0.7f) else palette.border),
+                        modifier = Modifier.testTag("player_comments_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ChatBubbleOutline,
+                                contentDescription = "Comentarios con marca de tiempo",
+                                tint = if (trackComments.isNotEmpty()) palette.accent else palette.textSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (trackComments.isNotEmpty()) "${trackComments.size}" else "Comentar",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (trackComments.isNotEmpty()) palette.accent else palette.textSecondary
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
 
                 // 4. Interactive Seek Bar & Timestamps
                 Slider(
@@ -890,7 +1254,7 @@ private fun FullScreenPlayerContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // 6. Quick Bottom Pills: Lyrics Toggle & Silence on Notifications Button
                 Row(
@@ -904,7 +1268,7 @@ private fun FullScreenPlayerContent(
                         border = BorderStroke(1.dp, if (showLyricsView) palette.accent else palette.border),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .height(44.dp)
                             .testTag("player_lyrics_pill_btn")
                     ) {
                         Row(
@@ -945,8 +1309,8 @@ private fun FullScreenPlayerContent(
                             color = if (muteNotifOn) palette.accent else palette.border
                         ),
                         modifier = Modifier
-                            .weight(1.15f)
-                            .height(48.dp)
+                            .weight(1.1f)
+                            .height(44.dp)
                             .testTag("player_mute_notif_btn")
                     ) {
                         Row(
@@ -974,8 +1338,182 @@ private fun FullScreenPlayerContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 7. Extra Controls Bar: Queue, Equalizer & Sleep Timer
+                val eqActive = playbackState.audioEffects.enabled
+                val timerActive = playbackState.sleepTimerRemainingMs != null || playbackState.sleepAfterCurrentTrack
+                val timerText = when {
+                    playbackState.sleepAfterCurrentTrack -> "Fin pista"
+                    playbackState.sleepTimerRemainingMs != null -> formatSleepCountdown(playbackState.sleepTimerRemainingMs)
+                    else -> "Timer"
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Surface(
+                        onClick = onOpenQueue,
+                        shape = RoundedCornerShape(20.dp),
+                        color = palette.surfaceElevated.copy(alpha = 0.72f),
+                        border = BorderStroke(1.dp, palette.border),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .testTag("player_queue_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                contentDescription = "Cola de reproducción",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Cola (${playbackState.queue.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = onOpenEqualizer,
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (eqActive) palette.accent.copy(alpha = 0.16f) else palette.surfaceElevated.copy(alpha = 0.72f),
+                        border = BorderStroke(1.dp, if (eqActive) palette.accent else palette.border),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .testTag("player_eq_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Equalizer,
+                                contentDescription = "Ecualizador",
+                                tint = if (eqActive) palette.accent else palette.textPrimary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (eqActive) playbackState.audioEffects.preset.label else "EQ",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (eqActive) palette.accent else palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = onOpenSleepTimer,
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (timerActive) palette.accent.copy(alpha = 0.16f) else palette.surfaceElevated.copy(alpha = 0.72f),
+                        border = BorderStroke(1.dp, if (timerActive) palette.accent else palette.border),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .testTag("player_timer_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = "Temporizador de apagado",
+                                tint = if (timerActive) palette.accent else palette.textPrimary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = timerText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (timerActive) palette.accent else palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
             }
+        }
+
+        FullScreenKaraokeOverlay(
+            visible = showKaraokeMode,
+            track = track,
+            playbackState = playbackState,
+            dynamicAccent = dynamicCoverAccent,
+            lyricsOffsetMs = lyricsOffsetMs,
+            onAdjustLyricsOffset = onAdjustLyricsOffset,
+            onResetLyricsOffset = onResetLyricsOffset,
+            onSeekTo = onSeekTo,
+            onPlayPause = onPlayPause,
+            onNext = onNext,
+            onPrevious = onPrevious,
+            onDismiss = { showKaraokeMode = false }
+        )
+
+        if (showLyricCardStudio && track.lyrics.isNotBlank()) {
+            LyricCardStudioSheet(
+                track = track,
+                accentColor = dynamicCoverAccent,
+                initialPositionMs = displayedPositionMs,
+                onDismiss = { showLyricCardStudio = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReactionPill(
+    emoji: String,
+    count: Long,
+    active: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val palette = LocalAmdvPalette.current
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = if (active) palette.accent.copy(alpha = 0.22f) else palette.surfaceElevated.copy(alpha = 0.65f),
+        border = BorderStroke(1.dp, if (active) palette.accent else palette.border),
+        modifier = Modifier.testTag(testTag)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        ) {
+            Text(text = emoji, fontSize = 13.sp)
+            Text(
+                text = if (count > 0) count.toString() else "+",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                color = if (active) palette.accent else palette.textSecondary
+            )
         }
     }
 }

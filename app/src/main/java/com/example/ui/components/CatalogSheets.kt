@@ -31,19 +31,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AudioFile
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -84,12 +84,12 @@ import com.example.data.ScannedLocalTrack
 import com.example.model.AppReleaseConfig
 import com.example.model.CatalogAlbum
 import com.example.model.CatalogArtist
+import com.example.model.CatalogTrack
+import com.example.model.TrackComment
 import com.example.model.TrackUiModel
 import com.example.ui.theme.LocalAmdvPalette
 import com.example.ui.theme.TrashRose
 import com.example.viewmodel.FolderImportUiState
-
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,6 +97,8 @@ fun AdminCatalogSheet(
     artists: List<CatalogArtist>,
     albums: List<CatalogAlbum>,
     cloudTracks: List<TrackUiModel>,
+    rawCatalogTracks: List<CatalogTrack>,
+    moderationComments: List<TrackComment> = emptyList(),
     latestRelease: AppReleaseConfig?,
     folderImportState: FolderImportUiState,
     isUploading: Boolean,
@@ -146,6 +148,34 @@ fun AdminCatalogSheet(
     onDeleteArtist: (String) -> Unit,
     onDeleteAlbum: (String) -> Unit,
     onDeleteTrack: (String) -> Unit,
+    onUpdateArtist: (
+        artist: CatalogArtist,
+        newName: String,
+        newBio: String,
+        newPhotoUri: Uri?,
+        newPhotoUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) -> Unit,
+    onUpdateAlbum: (
+        album: CatalogAlbum,
+        newArtist: CatalogArtist,
+        newTitle: String,
+        newReleaseYear: Long,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) -> Unit,
+    onUpdateTrack: (
+        track: CatalogTrack,
+        newArtist: CatalogArtist,
+        newAlbum: CatalogAlbum?,
+        newTitle: String,
+        newTrackNumber: Long,
+        newLyrics: String,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) -> Unit,
     onPublishAppUpdate: (
         versionCode: Long,
         versionName: String,
@@ -153,10 +183,15 @@ fun AdminCatalogSheet(
         releaseNotes: String,
         mandatory: Boolean,
         onDone: (Boolean) -> Unit
-    ) -> Unit
+    ) -> Unit,
+    onDeleteComment: (String) -> Unit = {}
 ) {
     val palette = LocalAmdvPalette.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    var editingArtist by remember { mutableStateOf<CatalogArtist?>(null) }
+    var editingAlbum by remember { mutableStateOf<CatalogAlbum?>(null) }
+    var editingTrack by remember { mutableStateOf<CatalogTrack?>(null) }
+    val rawTracksById = remember(rawCatalogTracks) { rawCatalogTracks.associateBy { it.id } }
 
     // Artist form state
     var artistName by remember { mutableStateOf("") }
@@ -337,6 +372,21 @@ fun AdminCatalogSheet(
                     onClick = { selectedTab = 4 },
                     text = { Text("Actualizar App", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 )
+                Tab(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
+                    text = {
+                        Text(
+                            text = if (moderationComments.isNotEmpty()) {
+                                "Comentarios (${moderationComments.size})"
+                            } else {
+                                "Comentarios"
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -431,6 +481,7 @@ fun AdminCatalogSheet(
                                 AdminExistingItemRow(
                                     title = art.name,
                                     subtitle = art.bio.ifBlank { "Sin biografía" },
+                                    onEdit = { editingArtist = art },
                                     onDelete = { onDeleteArtist(art.id) }
                                 )
                             }
@@ -531,6 +582,7 @@ fun AdminCatalogSheet(
                                 AdminExistingItemRow(
                                     title = alb.title,
                                     subtitle = "${alb.artistName} • ${alb.releaseYear}",
+                                    onEdit = { editingAlbum = alb },
                                     onDelete = { onDeleteAlbum(alb.id) }
                                 )
                             }
@@ -713,7 +765,7 @@ fun AdminCatalogSheet(
                                         if (useDirectUrlMode) null else trackAudioUri,
                                         if (useDirectUrlMode) trackAudioUrl else "",
                                         if (useDirectUrlMode) null else trackCoverUri,
-                                        if (useDirectUrlMode) trackCoverUrl else ""
+                                        trackCoverUrl
                                     ) { ok ->
                                         if (ok) {
                                             trackTitle = ""
@@ -742,9 +794,11 @@ fun AdminCatalogSheet(
                             HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 6.dp))
                             Text("Canciones en la nube (${cloudTracks.size})", style = MaterialTheme.typography.titleSmall)
                             cloudTracks.forEach { tr ->
+                                val raw = rawTracksById[tr.id]
                                 AdminExistingItemRow(
                                     title = tr.title,
                                     subtitle = "${tr.artist}${if (tr.albumTitle.isNotBlank()) " • ${tr.albumTitle}" else ""}",
+                                    onEdit = raw?.let { { editingTrack = it } },
                                     onDelete = { onDeleteTrack(tr.id) }
                                 )
                             }
@@ -758,9 +812,103 @@ fun AdminCatalogSheet(
                             onPublishAppUpdate = onPublishAppUpdate
                         )
                     }
+
+                    5 -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ChatBubbleOutline,
+                                contentDescription = null,
+                                tint = palette.accent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Moderación de comentarios (${moderationComments.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.textPrimary
+                            )
+                        }
+                        Text(
+                            text = "Revisa o elimina comentarios con marca de tiempo publicados por usuarios en las canciones.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textSecondary
+                        )
+                        if (moderationComments.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = palette.surfaceElevated.copy(alpha = 0.5f),
+                                border = BorderStroke(1.dp, palette.border),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Aún no hay comentarios publicados en ninguna canción.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = palette.textSecondary,
+                                    modifier = Modifier.padding(14.dp)
+                                )
+                            }
+                        } else {
+                            moderationComments.forEach { comment ->
+                                AdminExistingItemRow(
+                                    title = "${comment.trackTitle.ifBlank { "Canción" }} • ${formatCommentTimestamp(comment.timestampMs)}",
+                                    subtitle = "${comment.authorName}: ${comment.text}",
+                                    onEdit = null,
+                                    onDelete = { onDeleteComment(comment.id) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    val targetArtist = editingArtist
+    if (targetArtist != null) {
+        EditArtistDialog(
+            artist = targetArtist,
+            isSaving = isUploading,
+            onDismiss = { editingArtist = null },
+            onSave = { name, bio, photoUri, photoUrl ->
+                onUpdateArtist(targetArtist, name, bio, photoUri, photoUrl) { ok ->
+                    if (ok) editingArtist = null
+                }
+            }
+        )
+    }
+
+    val targetAlbum = editingAlbum
+    if (targetAlbum != null) {
+        EditAlbumDialog(
+            album = targetAlbum,
+            artists = artists,
+            isSaving = isUploading,
+            onDismiss = { editingAlbum = null },
+            onSave = { artist, title, year, coverUri, coverUrl ->
+                onUpdateAlbum(targetAlbum, artist, title, year, coverUri, coverUrl) { ok ->
+                    if (ok) editingAlbum = null
+                }
+            }
+        )
+    }
+
+    val targetTrack = editingTrack
+    if (targetTrack != null) {
+        EditTrackDialog(
+            track = targetTrack,
+            artists = artists,
+            albums = albums,
+            isSaving = isUploading,
+            onDismiss = { editingTrack = null },
+            onSave = { artist, album, title, num, lyrics, coverUri, coverUrl ->
+                onUpdateTrack(targetTrack, artist, album, title, num, lyrics, coverUri, coverUrl) { ok ->
+                    if (ok) editingTrack = null
+                }
+            }
+        )
     }
 }
 
@@ -768,6 +916,7 @@ fun AdminCatalogSheet(
 private fun AdminExistingItemRow(
     title: String,
     subtitle: String,
+    onEdit: (() -> Unit)? = null,
     onDelete: () -> Unit
 ) {
     val palette = LocalAmdvPalette.current
@@ -803,6 +952,18 @@ private fun AdminExistingItemRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (onEdit != null) {
+                IconButton(
+                    onClick = onEdit,
+                    modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "Editar elemento",
+                        tint = palette.accent
+                    )
+                }
             }
             IconButton(
                 onClick = onDelete,

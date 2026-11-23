@@ -18,10 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -33,6 +37,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,11 +55,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.PlaybackState
 import com.example.model.AppThemeMode
 import com.example.model.TrackUiModel
+import com.example.model.UserPlaylist
+import com.example.ui.components.PlaylistCoverMosaic
 import com.example.ui.components.TrackNumberedRow
 import com.example.ui.components.TrailingActionType
 import com.example.ui.theme.LocalAmdvPalette
@@ -63,6 +71,9 @@ import com.example.ui.theme.LocalAmdvPalette
 fun LibraryScreen(
     deviceTracks: List<TrackUiModel>,
     offlineTracks: List<TrackUiModel>,
+    allTracks: List<TrackUiModel> = emptyList(),
+    playlists: List<UserPlaylist> = emptyList(),
+    isSignedIn: Boolean = false,
     playbackState: PlaybackState,
     isAdmin: Boolean,
     hasAudioPermission: Boolean,
@@ -70,26 +81,35 @@ fun LibraryScreen(
     onOpenAdminPanel: () -> Unit,
     onSyncDeviceMusicClick: () -> Unit,
     onGoToSearchClick: () -> Unit,
+    onPlaylistClick: (UserPlaylist) -> Unit = {},
+    onCreatePlaylistClick: () -> Unit = {},
+    onJoinPlaylistByCodeClick: () -> Unit = {},
     onTrackClick: (TrackUiModel, List<TrackUiModel>) -> Unit,
     onToggleFavorite: (TrackUiModel) -> Unit,
     onDeleteTrack: (TrackUiModel) -> Unit,
     onOpenLyrics: (TrackUiModel) -> Unit,
     onDownloadTrack: (String) -> Unit,
     onRemoveDownload: (String) -> Unit,
+    onAddToPlaylist: (TrackUiModel) -> Unit = {},
+    onPlayNextInQueue: (TrackUiModel) -> Unit = {},
+    onAddToQueueEnd: (TrackUiModel) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = LocalAmdvPalette.current
     val isAndroid13OrHigher = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-    var selectedFilter by remember { mutableIntStateOf(0) } // 0: Todas, 1: Descargadas, 2: Dispositivo
+    var selectedFilter by remember { mutableIntStateOf(0) } // 0: Todas, 1: Playlists, 2: Descargadas, 3: Dispositivo
 
     val allPersonalTracks = remember(offlineTracks, deviceTracks) {
         offlineTracks + deviceTracks
     }
+    val tracksById = remember(allTracks, allPersonalTracks) {
+        (allTracks + allPersonalTracks).associateBy { it.id }
+    }
 
     val displayedTracks = remember(allPersonalTracks, offlineTracks, deviceTracks, selectedFilter) {
         when (selectedFilter) {
-            1 -> offlineTracks
-            2 -> deviceTracks
+            2 -> offlineTracks
+            3 -> deviceTracks
             else -> allPersonalTracks
         }
     }
@@ -269,6 +289,7 @@ fun LibraryScreen(
         ) {
             val filters = listOf(
                 "Todas (${allPersonalTracks.size})",
+                "Playlists (${playlists.size})",
                 "Descargadas (${offlineTracks.size})",
                 "Dispositivo (${deviceTracks.size})"
             )
@@ -288,7 +309,140 @@ fun LibraryScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        if (displayedTracks.isEmpty()) {
+        if (selectedFilter == 1) {
+            // Custom Playlists tab
+            if (isSignedIn) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onCreatePlaylistClick,
+                        border = BorderStroke(1.dp, palette.accent),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("library_create_playlist_btn")
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Nueva playlist", color = palette.accent, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onJoinPlaylistByCodeClick,
+                        border = BorderStroke(1.dp, palette.secondaryAccent),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(0.9f)
+                            .height(48.dp)
+                            .testTag("library_join_playlist_code_btn")
+                    ) {
+                        Icon(Icons.Filled.Group, contentDescription = null, tint = palette.secondaryAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Unirse código", color = palette.secondaryAccent, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            if (playlists.isEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                        contentDescription = null,
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (isSignedIn) "Aún no tienes playlists" else "Inicia sesión para tus playlists",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.textPrimary,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (isSignedIn) {
+                            "Crea listas personalizadas, organízalas a tu gusto y descárgalas completas para escucharlas sin conexión."
+                        } else {
+                            "Conecta tu cuenta de Google en la pestaña Perfil para crear y sincronizar tus playlists en la nube."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(playlists, key = { it.id }) { pl ->
+                        val plTracks = remember(pl.trackIds, tracksById) {
+                            pl.trackIds.mapNotNull { tracksById[it] }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = palette.surface,
+                            border = BorderStroke(1.dp, palette.border),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { onPlaylistClick(pl) }
+                                .testTag("library_playlist_card_${pl.id}")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                PlaylistCoverMosaic(
+                                    tracks = plTracks,
+                                    title = pl.name,
+                                    size = 56.dp,
+                                    cornerRadius = 12.dp
+                                )
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = pl.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (pl.description.isNotBlank()) {
+                                        Text(
+                                            text = pl.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = palette.textSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Text(
+                                        text = "${pl.trackIds.size} canciones",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.accent
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (displayedTracks.isEmpty()) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -306,8 +460,8 @@ fun LibraryScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = when (selectedFilter) {
-                        1 -> "Sin canciones descargadas"
-                        2 -> "Sin canciones del dispositivo"
+                        2 -> "Sin canciones descargadas"
+                        3 -> "Sin canciones del dispositivo"
                         else -> stringResource(R.string.empty_library_title)
                     },
                     style = MaterialTheme.typography.titleMedium,
@@ -317,8 +471,8 @@ fun LibraryScreen(
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = when (selectedFilter) {
-                        1 -> "Busca una canción y pulsa el botón de descarga para guardarla aquí y escucharla sin internet"
-                        2 -> "Pulsa arriba para conceder permiso de audio y sincronizar toda la música de tu dispositivo"
+                        2 -> "Busca una canción y pulsa el botón de descarga para guardarla aquí y escucharla sin internet"
+                        3 -> "Pulsa arriba para conceder permiso de audio y sincronizar toda la música de tu dispositivo"
                         else -> stringResource(R.string.empty_library_subtitle)
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -326,7 +480,7 @@ fun LibraryScreen(
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(18.dp))
-                if (selectedFilter == 2) {
+                if (selectedFilter == 3) {
                     Button(
                         onClick = onSyncDeviceMusicClick,
                         enabled = !isSyncingDeviceMusic,
@@ -394,7 +548,10 @@ fun LibraryScreen(
                             }
                         },
                         onDownloadClick = { onDownloadTrack(track.id) },
-                        onRemoveDownloadClick = { onRemoveDownload(track.id) }
+                        onRemoveDownloadClick = { onRemoveDownload(track.id) },
+                        onAddToPlaylistClick = { onAddToPlaylist(track) },
+                        onPlayNextClick = { onPlayNextInQueue(track) },
+                        onAddToQueueClick = { onAddToQueueEnd(track) }
                     )
                 }
             }

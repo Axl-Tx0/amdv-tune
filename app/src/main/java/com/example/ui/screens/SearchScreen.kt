@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,10 +67,14 @@ fun SearchScreen(
     onOpenLyrics: (TrackUiModel) -> Unit,
     onDownloadTrack: (String) -> Unit,
     onRemoveDownload: (String) -> Unit,
+    onAddToPlaylist: (TrackUiModel) -> Unit = {},
+    onPlayNextInQueue: (TrackUiModel) -> Unit = {},
+    onAddToQueueEnd: (TrackUiModel) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = LocalAmdvPalette.current
-    var selectedFilter by remember { mutableIntStateOf(0) } // 0: Todo, 1: Offline, 2: Álbumes, 3: Artistas
+    // 0: Canciones, 1: Offline, 2: Álbumes, 3: Artistas
+    var selectedFilter by remember { mutableIntStateOf(0) }
     val q = query.trim()
 
     val filteredArtists = remember(artists, q) {
@@ -110,7 +116,8 @@ fun SearchScreen(
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = palette.accent.copy(alpha = 0.2f),
                         selectedLabelColor = palette.accent
-                    )
+                    ),
+                    modifier = Modifier.testTag("search_filter_chip_$idx")
                 )
             }
         }
@@ -274,7 +281,10 @@ fun SearchScreen(
                                 trailingActionType = TrailingActionType.LYRICS,
                                 onTrailingAction = { onOpenLyrics(track) },
                                 onDownloadClick = { onDownloadTrack(track.id) },
-                                onRemoveDownloadClick = { onRemoveDownload(track.id) }
+                                onRemoveDownloadClick = { onRemoveDownload(track.id) },
+                                onAddToPlaylistClick = { onAddToPlaylist(track) },
+                                onPlayNextClick = { onPlayNextInQueue(track) },
+                                onAddToQueueClick = { onAddToQueueEnd(track) }
                             )
                         }
                     }

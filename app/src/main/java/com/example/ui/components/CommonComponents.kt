@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -42,6 +45,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -336,9 +341,14 @@ fun TrackNumberedRow(
     onTrailingAction: () -> Unit,
     modifier: Modifier = Modifier,
     onDownloadClick: (() -> Unit)? = null,
-    onRemoveDownloadClick: (() -> Unit)? = null
+    onRemoveDownloadClick: (() -> Unit)? = null,
+    onAddToPlaylistClick: (() -> Unit)? = null,
+    onPlayNextClick: (() -> Unit)? = null,
+    onAddToQueueClick: (() -> Unit)? = null
 ) {
     val palette = LocalAmdvPalette.current
+    var menuExpanded by remember { mutableStateOf(false) }
+    val hasOverflowMenu = onAddToPlaylistClick != null || onPlayNextClick != null || onAddToQueueClick != null
     val subtitle = if (track.albumTitle.isNotBlank()) {
         "${track.artist} • ${track.albumTitle}"
     } else {
@@ -486,6 +496,78 @@ fun TrackNumberedRow(
                         tint = TrashRose,
                         modifier = Modifier.size(21.dp)
                     )
+                }
+            }
+        }
+
+        if (hasOverflowMenu) {
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("track_overflow_${track.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "Más opciones",
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    containerColor = palette.surfaceElevated
+                ) {
+                    if (onPlayNextClick != null) {
+                        DropdownMenuItem(
+                            text = { Text("Reproducir siguiente", color = palette.textPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.SkipNext,
+                                    contentDescription = null,
+                                    tint = palette.accent
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onPlayNextClick()
+                            }
+                        )
+                    }
+                    if (onAddToQueueClick != null) {
+                        DropdownMenuItem(
+                            text = { Text("Añadir a la cola", color = palette.textPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                    contentDescription = null,
+                                    tint = palette.accent
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onAddToQueueClick()
+                            }
+                        )
+                    }
+                    if (onAddToPlaylistClick != null) {
+                        DropdownMenuItem(
+                            text = { Text("Añadir a playlist", color = palette.textPrimary) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                                    contentDescription = null,
+                                    tint = palette.accent
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onAddToPlaylistClick()
+                            }
+                        )
+                    }
                 }
             }
         }

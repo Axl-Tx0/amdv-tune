@@ -8,13 +8,16 @@ import com.example.data.AppDatabase
 import com.example.data.AudioPickerHelper
 import com.example.data.CatalogRepository
 import com.example.data.CloudSyncRepository
+import com.example.data.CommunityAndJamRepository
 import com.example.data.DeviceMusicSyncHelper
+import com.example.data.ListeningStatsRepository
 import com.example.data.LocalFolderScanner
 import com.example.data.LrcLibService
 import com.example.data.LrcLyricsCache
 import com.example.data.LrcParser
 import com.example.data.MusicPlayerController
 import com.example.data.OfflineDownloadManager
+import com.example.data.PersistedEqualizerConfig
 import com.example.data.PlaybackState
 import com.example.data.ScannedFolderAlbum
 import com.example.data.ScannedLocalTrack
@@ -22,14 +25,26 @@ import com.example.data.SeedTracksProvider
 import com.example.data.ThemePreferencesRepository
 import com.example.model.AppReleaseConfig
 import com.example.model.AppThemeMode
+import com.example.model.ArtistStats
+import com.example.model.AudioEffectsState
 import com.example.model.CatalogAlbum
 import com.example.model.CatalogArtist
 import com.example.model.CatalogTrack
+import com.example.model.CommunityTrackStats
 import com.example.model.DownloadedTrackEntity
+import com.example.model.EqualizerPreset
+import com.example.model.JamSession
+import com.example.model.ListeningStats
 import com.example.model.LocalTrackEntity
+import com.example.model.TrackComment
 import com.example.model.TrackUiModel
+import com.example.model.UserPlaylist
+import com.example.model.UserTrackReaction
 import com.example.model.toOfflineUiModel
 import com.example.model.toUiModel
+import java.time.LocalDate
+import kotlin.math.abs
+import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +54,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -68,6 +84,27 @@ data class AppUiState(
     val artists: List<CatalogArtist> = emptyList(),
     val albums: List<CatalogAlbum> = emptyList(),
     val rawCatalogTracks: List<CatalogTrack> = emptyList(),
+    val playlists: List<UserPlaylist> = emptyList(),
+    val recentTracks: List<TrackUiModel> = emptyList(),
+    val topTracks: List<Pair<TrackUiModel, Int>> = emptyList(),
+    val topArtists: List<Pair<String, Int>> = emptyList(),
+    val totalPlaysCount: Int = 0,
+    val totalListeningMinutes: Int = 0,
+    val listeningStreakDays: Int = 0,
+    val lyricsOffsetsMs: Map<String, Long> = emptyMap(),
+    val trendingTracks: List<Pair<TrackUiModel, Long>> = emptyList(),
+    val communityStats: Map<String, CommunityTrackStats> = emptyMap(),
+    val userReactions: Map<String, UserTrackReaction> = emptyMap(),
+    val latestReleaseAlbum: CatalogAlbum? = null,
+    val recentReleaseAlbums: List<CatalogAlbum> = emptyList(),
+    val hasUnreadReleases: Boolean = false,
+    val dailyMixTracks: List<TrackUiModel> = emptyList(),
+    val activeJam: JamSession? = null,
+    val isJamHost: Boolean = false,
+    val artistStats: Map<String, ArtistStats> = emptyMap(),
+    val followedArtistIds: Set<String> = emptySet(),
+    val currentTrackComments: List<TrackComment> = emptyList(),
+    val moderationComments: List<TrackComment> = emptyList(),
     val latestRelease: AppReleaseConfig? = null,
     val downloadProgress: Map<String, Float> = emptyMap(),
     val searchQuery: String = "",
@@ -99,8 +136,16 @@ private data class CatalogSnapshot(
     val artists: List<CatalogArtist> = emptyList(),
     val albums: List<CatalogAlbum> = emptyList(),
     val tracks: List<CatalogTrack> = emptyList(),
+    val playlists: List<UserPlaylist> = emptyList(),
     val cloudFavoriteIds: Set<String> = emptySet(),
-    val latestRelease: AppReleaseConfig? = null
+    val latestRelease: AppReleaseConfig? = null,
+    val communityStats: Map<String, CommunityTrackStats> = emptyMap(),
+    val userReactions: Map<String, UserTrackReaction> = emptyMap(),
+    val activeJam: JamSession? = null,
+    val artistStats: Map<String, ArtistStats> = emptyMap(),
+    val followedArtistIds: Set<String> = emptySet(),
+    val currentTrackComments: List<TrackComment> = emptyList(),
+    val moderationComments: List<TrackComment> = emptyList()
 )
 
 private data class UiMeta(
@@ -110,7 +155,10 @@ private data class UiMeta(
     val isImporting: Boolean = false,
     val isUploading: Boolean = false,
     val uploadProgress: Float = 0f,
-    val downloadProgress: Map<String, Float> = emptyMap()
+    val downloadProgress: Map<String, Float> = emptyMap(),
+    val listeningStats: ListeningStats = ListeningStats(),
+    val dailyMixSeed: Long = 0L,
+    val lastSeenReleaseMs: Long = 0L
 )
 
 class MusicViewModel(
@@ -124,6 +172,7 @@ class MusicViewModel(
     private val downloadedDao = database.downloadedTrackDao()
     private val offlineManager = OfflineDownloadManager(appContext, downloadedDao)
     private val lyricsCache = LrcLyricsCache(appContext)
+    private val listeningStatsRepo = ListeningStatsRepository(appContext)
 
     private val _searchQuery = MutableStateFlow("")
     private val _syncMessage = MutableStateFlow<String?>(null)
@@ -133,6 +182,8 @@ class MusicViewModel(
     private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     private val _catalogSnapshot = MutableStateFlow(CatalogSnapshot())
     private val _cachedLyrics = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _listeningStats = MutableStateFlow(ListeningStats())
+    private val _dailyMixSeed = MutableStateFlow(runCatching { LocalDate.now().toEpochDay() }.getOrDefault(System.currentTimeMillis() / 86_400_000L))
     private val _folderImportState = MutableStateFlow(FolderImportUiState())
     val folderImportState: StateFlow<FolderImportUiState> = _folderImportState.asStateFlow()
 
@@ -141,12 +192,20 @@ class MusicViewModel(
 
     private val attemptedAutoLyricsIds = mutableSetOf<String>()
     private val inFlightLyricsIds = mutableSetOf<String>()
+    private var lastRecordedPlayTrackId: String? = null
 
     private var cloudSyncRepository: CloudSyncRepository? = null
     private var catalogRepository: CatalogRepository? = null
+    private var communityRepository: CommunityAndJamRepository? = null
     private var activeUserId: String? = null
+    private var activeDisplayName: String = "Usuario AMDV"
     private var isAdminSession: Boolean = false
     private var cloudSyncJob: Job? = null
+    private var jamObserverJob: Job? = null
+    private var trackCommentsJob: Job? = null
+    private var lastPushedJamTrackId: String? = null
+    private var lastPushedJamPlaying: Boolean? = null
+    private var lastPushedJamPosMs: Long = 0L
 
     val playbackState: StateFlow<PlaybackState> = playerController.playbackState
 
@@ -157,7 +216,10 @@ class MusicViewModel(
         _isImporting,
         _isCatalogUploading,
         _catalogUploadProgress,
-        _downloadProgress
+        _downloadProgress,
+        _listeningStats,
+        _dailyMixSeed,
+        themeRepo.lastSeenReleaseMsFlow
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiMeta(
@@ -167,7 +229,10 @@ class MusicViewModel(
             isImporting = values[3] as Boolean,
             isUploading = values[4] as Boolean,
             uploadProgress = values[5] as Float,
-            downloadProgress = values[6] as Map<String, Float>
+            downloadProgress = values[6] as Map<String, Float>,
+            listeningStats = values[7] as ListeningStats,
+            dailyMixSeed = values[8] as Long,
+            lastSeenReleaseMs = values[9] as Long
         )
     }
 
@@ -198,6 +263,18 @@ class MusicViewModel(
             }
         }
         viewModelScope.launch {
+            _listeningStats.value = listeningStatsRepo.load()
+        }
+        viewModelScope.launch {
+            val savedEq = themeRepo.equalizerConfigFlow.first()
+            playerController.applyPersistedAudioEffects(
+                enabled = savedEq.enabled,
+                preset = savedEq.preset,
+                bandLevelsMb = savedEq.bandLevelsMb,
+                bassBoostStrength = savedEq.bassBoostStrength
+            )
+        }
+        viewModelScope.launch {
             themeRepo.autoContinueFlow.collect { enabled ->
                 playerController.setAutoContinueEnabled(enabled)
             }
@@ -208,6 +285,11 @@ class MusicViewModel(
             }
         }
         viewModelScope.launch {
+            themeRepo.crossfadeSecondsFlow.collect { sec ->
+                playerController.setCrossfadeSeconds(sec)
+            }
+        }
+        viewModelScope.launch {
             playerController.playbackState
                 .map { it.currentTrack }
                 .distinctUntilChangedBy { it?.id }
@@ -215,7 +297,68 @@ class MusicViewModel(
                     if (track != null && track.lyrics.isBlank()) {
                         fetchLyricsFromLrcLib(track, forceRefresh = false)
                     }
+                    observeCommentsForCurrentTrack(track?.id)
                 }
+        }
+        viewModelScope.launch {
+            playerController.playbackState
+                .map { Pair(it.currentTrack?.id, it.isPlaying) }
+                .collect { (trackId, isPlaying) ->
+                    if (trackId != null && isPlaying && trackId != lastRecordedPlayTrackId) {
+                        lastRecordedPlayTrackId = trackId
+                        recordTrackPlay(trackId)
+                    }
+                }
+        }
+        viewModelScope.launch {
+            playerController.playbackState.collect { pb ->
+                val jam = _catalogSnapshot.value.activeJam ?: return@collect
+                val uid = activeUserId ?: return@collect
+                if (!jam.active || jam.hostUserId != uid) return@collect
+                val trackId = pb.currentTrack?.id.orEmpty()
+                val playing = pb.isPlaying
+                val pos = pb.positionMs
+                val changed = trackId != lastPushedJamTrackId ||
+                    playing != lastPushedJamPlaying ||
+                    abs(pos - lastPushedJamPosMs) > 4000L
+                if (changed && trackId.isNotBlank()) {
+                    lastPushedJamTrackId = trackId
+                    lastPushedJamPlaying = playing
+                    lastPushedJamPosMs = pos
+                    communityRepository?.updateJamPlayback(
+                        roomCode = jam.roomCode,
+                        currentTrackId = trackId,
+                        playing = playing,
+                        positionMs = pos
+                    )
+                }
+            }
+        }
+    }
+
+    private fun recordTrackPlay(trackId: String) {
+        val current = _listeningStats.value
+        val nextRecent = (listOf(trackId) + current.recentTrackIds.filter { it != trackId }).take(25)
+        val nextCounts = current.playCounts.toMutableMap().apply {
+            this[trackId] = (this[trackId] ?: 0) + 1
+        }
+        val trackDuration = uiState.value.tracks.firstOrNull { it.id == trackId }?.durationSec?.takeIf { it > 0L } ?: 180L
+        val todayIso = runCatching { LocalDate.now().toString() }.getOrDefault("")
+        val nextDays = if (todayIso.isNotBlank() && !current.activeDays.contains(todayIso)) {
+            (current.activeDays + todayIso).sorted().takeLast(365)
+        } else {
+            current.activeDays
+        }
+        val updated = current.copy(
+            recentTrackIds = nextRecent,
+            playCounts = nextCounts,
+            totalListeningSec = current.totalListeningSec + trackDuration,
+            activeDays = nextDays
+        )
+        _listeningStats.value = updated
+        viewModelScope.launch {
+            listeningStatsRepo.save(updated)
+            communityRepository?.recordCommunityPlay(trackId)
         }
     }
 
@@ -281,6 +424,57 @@ class MusicViewModel(
         val offlineUi = cloudUi.filter { it.isDownloaded } + offlineOnlyUi
         val deviceUi = localUi.filter { it.sourceType == "LOCAL" }
         val combinedTracks = cloudUi + offlineOnlyUi + localUi
+        val tracksById = combinedTracks.associateBy { it.id }
+
+        val recentTracks = meta.listeningStats.recentTrackIds.mapNotNull { tracksById[it] }
+        val topTracks = meta.listeningStats.playCounts.entries
+            .mapNotNull { (id, count) -> tracksById[id]?.let { it to count } }
+            .sortedByDescending { it.second }
+            .take(5)
+        val artistPlayCounts = mutableMapOf<String, Int>()
+        meta.listeningStats.playCounts.forEach { (id, count) ->
+            val artistName = tracksById[id]?.artist?.trim()
+            if (!artistName.isNullOrBlank()) {
+                artistPlayCounts[artistName] = (artistPlayCounts[artistName] ?: 0) + count
+            }
+        }
+        val topArtists = artistPlayCounts.entries
+            .sortedByDescending { it.value }
+            .take(5)
+            .map { it.key to it.value }
+        val totalPlays = meta.listeningStats.playCounts.values.sum()
+        val totalListeningMinutes = (meta.listeningStats.totalListeningSec / 60L).toInt()
+        val todayIso = runCatching { LocalDate.now().toString() }.getOrDefault("")
+        val streakDays = meta.listeningStats.currentStreakDays(todayIso)
+
+        val trendingTracks = catalog.communityStats.values
+            .mapNotNull { stat ->
+                val tr = tracksById[stat.trackId.ifBlank { stat.id }] ?: return@mapNotNull null
+                val score = stat.playCount + (stat.fireCount + stat.heartCount + stat.headphonesCount) * 2L
+                if (score <= 0L) null else Triple(tr, stat.playCount.coerceAtLeast(1L), score)
+            }
+            .sortedByDescending { it.third }
+            .take(10)
+            .map { it.first to it.second }
+
+        val sortedReleaseAlbums = catalog.albums
+            .sortedWith(
+                compareByDescending<CatalogAlbum> { it.createdAt?.toDate()?.time ?: 0L }
+                    .thenByDescending { it.releaseYear }
+            )
+        val latestReleaseAlbum = sortedReleaseAlbums.firstOrNull()
+        val newestReleaseTimestampMs = latestReleaseAlbum?.createdAt?.toDate()?.time ?: 0L
+        val hasUnreadReleases = sortedReleaseAlbums.isNotEmpty() && (
+            newestReleaseTimestampMs > meta.lastSeenReleaseMs ||
+                (meta.lastSeenReleaseMs == 0L && sortedReleaseAlbums.isNotEmpty())
+            )
+
+        val dailyMixTracks = buildDailyMix(
+            tracks = combinedTracks,
+            playCounts = meta.listeningStats.playCounts,
+            seed = meta.dailyMixSeed
+        )
+
         playerController.updateCatalog(combinedTracks)
 
         return AppUiState(
@@ -292,6 +486,27 @@ class MusicViewModel(
             artists = catalog.artists,
             albums = catalog.albums,
             rawCatalogTracks = catalog.tracks,
+            playlists = catalog.playlists,
+            recentTracks = recentTracks,
+            topTracks = topTracks,
+            topArtists = topArtists,
+            totalPlaysCount = totalPlays,
+            totalListeningMinutes = totalListeningMinutes,
+            listeningStreakDays = streakDays,
+            lyricsOffsetsMs = meta.listeningStats.lyricsOffsetsMs,
+            trendingTracks = trendingTracks,
+            communityStats = catalog.communityStats,
+            userReactions = catalog.userReactions,
+            latestReleaseAlbum = latestReleaseAlbum,
+            recentReleaseAlbums = sortedReleaseAlbums.take(20),
+            hasUnreadReleases = hasUnreadReleases,
+            dailyMixTracks = dailyMixTracks,
+            activeJam = catalog.activeJam,
+            isJamHost = catalog.activeJam != null && catalog.activeJam.hostUserId == activeUserId,
+            artistStats = catalog.artistStats,
+            followedArtistIds = catalog.followedArtistIds,
+            currentTrackComments = catalog.currentTrackComments,
+            moderationComments = catalog.moderationComments,
             latestRelease = catalog.latestRelease,
             downloadProgress = meta.downloadProgress,
             searchQuery = meta.query,
@@ -303,19 +518,57 @@ class MusicViewModel(
         )
     }
 
+    private fun buildDailyMix(
+        tracks: List<TrackUiModel>,
+        playCounts: Map<String, Int>,
+        seed: Long
+    ): List<TrackUiModel> {
+        if (tracks.isEmpty()) return emptyList()
+        val rng = Random(seed)
+        val favorites = tracks.filter { it.favorite }.shuffled(rng)
+        val unheard = tracks.filter { !it.favorite && (playCounts[it.id] ?: 0) == 0 }.shuffled(rng)
+        val others = tracks.filter { !it.favorite && (playCounts[it.id] ?: 0) > 0 }.shuffled(rng)
+
+        val picked = mutableListOf<TrackUiModel>()
+        val artistUsage = mutableMapOf<String, Int>()
+        fun addDiverse(source: List<TrackUiModel>, limit: Int) {
+            for (tr in source) {
+                if (picked.size >= limit) break
+                if (picked.any { it.id == tr.id }) continue
+                val count = artistUsage[tr.artist.lowercase()] ?: 0
+                if (count < 2 || tracks.size <= 8) {
+                    picked.add(tr)
+                    artistUsage[tr.artist.lowercase()] = count + 1
+                }
+            }
+        }
+        addDiverse(favorites, 6)
+        addDiverse(unheard, 12)
+        addDiverse(others, 15)
+        if (picked.size < 15) {
+            tracks.shuffled(rng).forEach { tr ->
+                if (picked.size < 15 && picked.none { it.id == tr.id }) picked.add(tr)
+            }
+        }
+        return picked
+    }
+
     fun attachAuthenticatedCloud(
         userId: String,
         displayName: String,
         isAdmin: Boolean,
         repo: CloudSyncRepository,
-        catalogRepo: CatalogRepository
+        catalogRepo: CatalogRepository,
+        communityAndJamRepo: CommunityAndJamRepository
     ) {
         if (activeUserId == userId && cloudSyncJob?.isActive == true) return
         detachAuthenticatedCloud()
         activeUserId = userId
+        activeDisplayName = displayName
         isAdminSession = isAdmin
         cloudSyncRepository = repo
         catalogRepository = catalogRepo
+        communityRepository = communityAndJamRepo
 
         cloudSyncJob = viewModelScope.launch {
             val currentTheme = uiState.value.themeMode
@@ -384,20 +637,96 @@ class MusicViewModel(
             }
 
             launch {
+                repo.observeUserPlaylists(userId)
+                    .catch { err ->
+                        _syncMessage.value = "Playlists en nube: ${err.localizedMessage ?: "sin conexión"}"
+                    }
+                    .collect { playlists ->
+                        _catalogSnapshot.update { it.copy(playlists = playlists) }
+                    }
+            }
+
+            launch {
                 catalogRepo.observeAppReleaseConfig()
                     .catch { }
                     .collect { release ->
                         _catalogSnapshot.update { it.copy(latestRelease = release) }
                     }
             }
+
+            launch {
+                communityAndJamRepo.observeCommunityStats()
+                    .catch { }
+                    .collect { stats ->
+                        _catalogSnapshot.update { it.copy(communityStats = stats) }
+                    }
+            }
+
+            launch {
+                communityAndJamRepo.observeUserReactions(userId)
+                    .catch { }
+                    .collect { reactions ->
+                        _catalogSnapshot.update { it.copy(userReactions = reactions) }
+                    }
+            }
+
+            launch {
+                communityAndJamRepo.observeArtistStats()
+                    .catch { }
+                    .collect { stats ->
+                        _catalogSnapshot.update { it.copy(artistStats = stats) }
+                    }
+            }
+
+            launch {
+                communityAndJamRepo.observeFollowedArtistIds(userId)
+                    .catch { }
+                    .collect { followed ->
+                        _catalogSnapshot.update { it.copy(followedArtistIds = followed) }
+                    }
+            }
+
+            if (isAdmin) {
+                launch {
+                    communityAndJamRepo.observeAllCommentsForModeration()
+                        .catch { }
+                        .collect { allComments ->
+                            _catalogSnapshot.update { it.copy(moderationComments = allComments) }
+                        }
+                }
+            }
+        }
+
+        observeCommentsForCurrentTrack(playbackState.value.currentTrack?.id)
+    }
+
+    private fun observeCommentsForCurrentTrack(trackId: String?) {
+        trackCommentsJob?.cancel()
+        trackCommentsJob = null
+        val repo = communityRepository
+        if (trackId.isNullOrBlank() || repo == null || activeUserId == null) {
+            _catalogSnapshot.update { it.copy(currentTrackComments = emptyList()) }
+            return
+        }
+        trackCommentsJob = viewModelScope.launch {
+            repo.observeCommentsForTrack(trackId)
+                .catch { }
+                .collect { comments ->
+                    _catalogSnapshot.update { it.copy(currentTrackComments = comments) }
+                }
         }
     }
 
     fun detachAuthenticatedCloud() {
+        jamObserverJob?.cancel()
+        jamObserverJob = null
+        trackCommentsJob?.cancel()
+        trackCommentsJob = null
         cloudSyncJob?.cancel()
         cloudSyncJob = null
         cloudSyncRepository = null
         catalogRepository = null
+        communityRepository = null
         activeUserId = null
         isAdminSession = false
         _catalogSnapshot.value = CatalogSnapshot()
@@ -459,6 +788,217 @@ class MusicViewModel(
             "Silencio en notificaciones activado: se silenciará brevemente al llegar una notificación"
         } else {
             "Música sin cortes activada: no se silenciará al llegar notificaciones"
+        }
+    }
+
+    // --- Queue Controls ---
+    fun playNextInQueue(track: TrackUiModel) {
+        playerController.playNextInQueue(track)
+        _syncMessage.value = "\"${track.title}\" sonará a continuación"
+    }
+
+    fun addToQueueEnd(track: TrackUiModel) {
+        playerController.addToQueueEnd(track)
+        _syncMessage.value = "\"${track.title}\" añadida a la cola"
+    }
+
+    fun removeFromQueue(index: Int) = playerController.removeFromQueue(index)
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = playerController.moveQueueItem(fromIndex, toIndex)
+    fun playQueueIndex(index: Int) = playerController.playQueueIndex(index)
+
+    // --- Sleep Timer ---
+    fun setSleepTimerMinutes(minutes: Int) {
+        playerController.setSleepTimerMinutes(minutes)
+        _syncMessage.value = if (minutes > 0) {
+            "Temporizador activado: se pausará en $minutes min"
+        } else {
+            "Temporizador desactivado"
+        }
+    }
+
+    fun setSleepAfterCurrentTrack() {
+        playerController.setSleepAfterCurrentTrack()
+        _syncMessage.value = "La música se pausará al terminar esta canción"
+    }
+
+    fun cancelSleepTimer() {
+        playerController.cancelSleepTimer()
+        _syncMessage.value = "Temporizador cancelado"
+    }
+
+    // --- Equalizer & Bass Boost ---
+    private fun persistEffects(state: AudioEffectsState) {
+        viewModelScope.launch {
+            themeRepo.saveEqualizerConfig(
+                PersistedEqualizerConfig(
+                    enabled = state.enabled,
+                    preset = state.preset,
+                    bandLevelsMb = state.bands.map { it.levelMb },
+                    bassBoostStrength = state.bassBoostStrength
+                )
+            )
+        }
+    }
+
+    fun setEqualizerEnabled(enabled: Boolean) {
+        val updated = playerController.setEqualizerEnabled(enabled)
+        persistEffects(updated)
+    }
+
+    fun selectEqualizerPreset(preset: EqualizerPreset) {
+        val updated = playerController.selectEqualizerPreset(preset)
+        persistEffects(updated)
+    }
+
+    fun setEqualizerBandLevel(bandIndex: Int, levelMb: Int) {
+        val updated = playerController.setEqualizerBandLevel(bandIndex, levelMb)
+        persistEffects(updated)
+    }
+
+    fun setBassBoostStrength(strength: Int) {
+        val updated = playerController.setBassBoostStrength(strength)
+        persistEffects(updated)
+    }
+
+    // --- Custom Playlists (Cloud Synced + Offline Download) ---
+    fun createPlaylist(
+        name: String,
+        description: String = "",
+        initialTrackId: String? = null,
+        onDone: (Boolean) -> Unit = {}
+    ) {
+        val uid = activeUserId
+        val repo = cloudSyncRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google en Perfil para crear y sincronizar playlists."
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            val initialIds = if (initialTrackId.isNullOrBlank()) emptyList() else listOf(initialTrackId)
+            repo.createPlaylist(uid, name, description, initialIds)
+                .onSuccess { created ->
+                    _syncMessage.value = "Playlist \"${created.name}\" creada"
+                    onDone(true)
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo crear la playlist"
+                    onDone(false)
+                }
+        }
+    }
+
+    fun renamePlaylist(
+        playlistId: String,
+        newName: String,
+        newDescription: String,
+        onDone: (Boolean) -> Unit = {}
+    ) {
+        val uid = activeUserId
+        val repo = cloudSyncRepository
+        if (uid == null || repo == null) {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            repo.updatePlaylist(uid, playlistId, name = newName, description = newDescription)
+                .onSuccess {
+                    _syncMessage.value = "Playlist actualizada"
+                    onDone(true)
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo actualizar la playlist"
+                    onDone(false)
+                }
+        }
+    }
+
+    fun deletePlaylist(playlistId: String, onDone: () -> Unit = {}) {
+        val uid = activeUserId
+        val repo = cloudSyncRepository ?: return
+        if (uid == null) return
+        viewModelScope.launch {
+            repo.deletePlaylist(uid, playlistId)
+                .onSuccess {
+                    _syncMessage.value = "Playlist eliminada"
+                    onDone()
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo eliminar la playlist"
+                }
+        }
+    }
+
+    fun toggleTrackInPlaylist(playlist: UserPlaylist, track: TrackUiModel) {
+        val uid = activeUserId
+        val repo = cloudSyncRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para editar playlists."
+            return
+        }
+        val alreadyIn = playlist.trackIds.contains(track.id)
+        val nextIds = if (alreadyIn) {
+            playlist.trackIds.filter { it != track.id }
+        } else {
+            playlist.trackIds + track.id
+        }
+        viewModelScope.launch {
+            repo.updatePlaylist(uid, playlist.id, trackIds = nextIds)
+                .onSuccess {
+                    _syncMessage.value = if (alreadyIn) {
+                        "Quitada de \"${playlist.name}\""
+                    } else {
+                        "Añadida a \"${playlist.name}\""
+                    }
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo actualizar la playlist"
+                }
+        }
+    }
+
+    fun removeTrackFromPlaylist(playlist: UserPlaylist, trackId: String) {
+        val uid = activeUserId
+        val repo = cloudSyncRepository ?: return
+        if (uid == null) return
+        val nextIds = playlist.trackIds.filter { it != trackId }
+        viewModelScope.launch {
+            repo.updatePlaylist(uid, playlist.id, trackIds = nextIds)
+                .onSuccess {
+                    _syncMessage.value = "Canción quitada de \"${playlist.name}\""
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo quitar la canción"
+                }
+        }
+    }
+
+    fun downloadPlaylistOffline(playlist: UserPlaylist) {
+        val catalogById = _catalogSnapshot.value.tracks.associateBy { it.id }
+        val toDownload = playlist.trackIds.mapNotNull { catalogById[it] }
+        if (toDownload.isEmpty()) {
+            _syncMessage.value = "No hay canciones de la nube pendientes por descargar en esta playlist."
+            return
+        }
+        viewModelScope.launch {
+            var count = 0
+            toDownload.forEach { ct ->
+                val already = downloadedDao.getByTrackId(ct.id)
+                if (already == null || !File(already.localAudioPath).exists()) {
+                    _downloadProgress.update { it + (ct.id to 0.05f) }
+                    val isFav = _catalogSnapshot.value.cloudFavoriteIds.contains(ct.id)
+                    val res = offlineManager.downloadTrack(ct, isFav) { p ->
+                        _downloadProgress.update { it + (ct.id to p) }
+                    }
+                    _downloadProgress.update { it - ct.id }
+                    if (res.isSuccess) count++
+                }
+            }
+            _syncMessage.value = if (count > 0) {
+                "Se descargaron $count canciones de \"${playlist.name}\" para escuchar offline"
+            } else {
+                "Toda la playlist \"${playlist.name}\" ya está disponible offline"
+            }
         }
     }
 
@@ -985,6 +1525,119 @@ class MusicViewModel(
         }
     }
 
+    fun adminUpdateArtist(
+        artist: CatalogArtist,
+        newName: String,
+        newBio: String,
+        newPhotoUri: Uri?,
+        newPhotoUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) {
+        val repo = catalogRepository ?: run {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            _isCatalogUploading.value = true
+            _catalogUploadProgress.value = 0.2f
+            val res = repo.updateArtist(
+                artist = artist,
+                newName = newName,
+                newBio = newBio,
+                newPhotoUri = newPhotoUri,
+                newPhotoUrlInput = newPhotoUrlInput,
+                relatedAlbums = _catalogSnapshot.value.albums,
+                relatedTracks = _catalogSnapshot.value.tracks
+            ) { p -> _catalogUploadProgress.value = p }
+            _isCatalogUploading.value = false
+            _catalogUploadProgress.value = 0f
+            res.onSuccess {
+                _syncMessage.value = "Artista actualizado: ${newName.trim()}"
+                onDone(true)
+            }.onFailure { err ->
+                _syncMessage.value = err.localizedMessage ?: "No se pudo editar el artista"
+                onDone(false)
+            }
+        }
+    }
+
+    fun adminUpdateAlbum(
+        album: CatalogAlbum,
+        newArtist: CatalogArtist,
+        newTitle: String,
+        newReleaseYear: Long,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) {
+        val repo = catalogRepository ?: run {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            _isCatalogUploading.value = true
+            _catalogUploadProgress.value = 0.2f
+            val res = repo.updateAlbum(
+                album = album,
+                newArtist = newArtist,
+                newTitle = newTitle,
+                newReleaseYear = newReleaseYear,
+                newCoverUri = newCoverUri,
+                newCoverUrlInput = newCoverUrlInput,
+                relatedTracks = _catalogSnapshot.value.tracks
+            ) { p -> _catalogUploadProgress.value = p }
+            _isCatalogUploading.value = false
+            _catalogUploadProgress.value = 0f
+            res.onSuccess {
+                _syncMessage.value = "Álbum actualizado: ${newTitle.trim()}"
+                onDone(true)
+            }.onFailure { err ->
+                _syncMessage.value = err.localizedMessage ?: "No se pudo editar el álbum"
+                onDone(false)
+            }
+        }
+    }
+
+    fun adminUpdateTrack(
+        track: CatalogTrack,
+        newArtist: CatalogArtist,
+        newAlbum: CatalogAlbum?,
+        newTitle: String,
+        newTrackNumber: Long,
+        newLyrics: String,
+        newCoverUri: Uri?,
+        newCoverUrlInput: String,
+        onDone: (Boolean) -> Unit
+    ) {
+        val repo = catalogRepository ?: run {
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            _isCatalogUploading.value = true
+            _catalogUploadProgress.value = 0.2f
+            val res = repo.updateTrack(
+                track = track,
+                newArtist = newArtist,
+                newAlbum = newAlbum,
+                newTitle = newTitle,
+                newTrackNumber = newTrackNumber,
+                newLyrics = newLyrics,
+                newCoverUri = newCoverUri,
+                newCoverUrlInput = newCoverUrlInput
+            ) { p -> _catalogUploadProgress.value = p }
+            _isCatalogUploading.value = false
+            _catalogUploadProgress.value = 0f
+            res.onSuccess {
+                _syncMessage.value = "Canción actualizada: ${newTitle.trim()}"
+                onDone(true)
+            }.onFailure { err ->
+                _syncMessage.value = err.localizedMessage ?: "No se pudo editar la canción"
+                onDone(false)
+            }
+        }
+    }
+
     fun adminDeleteCatalogArtist(artistId: String) {
         val repo = catalogRepository ?: return
         viewModelScope.launch {
@@ -1025,6 +1678,355 @@ class MusicViewModel(
                 onDone(false)
             }
         }
+    }
+
+    // --- v1.8 Lyrics Offset, Daily Mix, Reactions, Live Jam & Shared Playlists ---
+    fun adjustLyricsOffset(trackId: String, deltaMs: Long) {
+        val current = _listeningStats.value
+        val prev = current.lyricsOffsetsMs[trackId] ?: 0L
+        val next = (prev + deltaMs).coerceIn(-15_000L, 15_000L)
+        val updatedMap = current.lyricsOffsetsMs.toMutableMap().apply {
+            if (next == 0L) remove(trackId) else put(trackId, next)
+        }
+        val updated = current.copy(lyricsOffsetsMs = updatedMap)
+        _listeningStats.value = updated
+        viewModelScope.launch { listeningStatsRepo.save(updated) }
+    }
+
+    fun resetLyricsOffset(trackId: String) {
+        val current = _listeningStats.value
+        if (!current.lyricsOffsetsMs.containsKey(trackId)) return
+        val updated = current.copy(lyricsOffsetsMs = current.lyricsOffsetsMs - trackId)
+        _listeningStats.value = updated
+        viewModelScope.launch { listeningStatsRepo.save(updated) }
+    }
+
+    fun regenerateDailyMix() {
+        _dailyMixSeed.value = System.currentTimeMillis()
+        _syncMessage.value = "Nuevo Mix Diario generado"
+    }
+
+    fun playDailyMix() {
+        val mix = uiState.value.dailyMixTracks
+        val first = mix.firstOrNull() ?: return
+        playerController.playTrack(first, mix)
+    }
+
+    fun playAlbumTracks(album: CatalogAlbum) {
+        val albumTracks = uiState.value.cloudTracks
+            .filter { it.albumId == album.id }
+            .sortedBy { it.trackNumber }
+        val first = albumTracks.firstOrNull() ?: return
+        playerController.playTrack(first, albumTracks)
+    }
+
+    fun toggleTrackReaction(trackId: String, reactionType: String) {
+        val uid = activeUserId
+        val repo = communityRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google en Perfil para reaccionar."
+            return
+        }
+        val current = _catalogSnapshot.value.userReactions[trackId]
+        viewModelScope.launch {
+            repo.toggleReaction(uid, trackId, reactionType, current)
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo guardar tu reacción"
+                }
+        }
+    }
+
+    fun createJamSession() {
+        val uid = activeUserId
+        val repo = communityRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para crear una sala Jam."
+            return
+        }
+        val pb = playbackState.value
+        val currentTrackId = pb.currentTrack?.id ?: uiState.value.cloudTracks.firstOrNull()?.id.orEmpty()
+        val queueIds = pb.queue.filter { it.isCloudCatalog }.map { it.id }.take(30)
+        viewModelScope.launch {
+            repo.createJamSession(
+                hostUserId = uid,
+                hostName = activeDisplayName,
+                currentTrackId = currentTrackId,
+                playing = pb.isPlaying,
+                positionMs = pb.positionMs,
+                queueTrackIds = queueIds
+            ).onSuccess { session ->
+                lastPushedJamTrackId = session.currentTrackId
+                lastPushedJamPlaying = session.playing
+                lastPushedJamPosMs = session.positionMs
+                startObservingJam(session.roomCode)
+                _syncMessage.value = "Sala Jam ${session.roomCode} creada. Comparte el código con tus amigos."
+            }.onFailure { err ->
+                _syncMessage.value = err.localizedMessage ?: "No se pudo crear la sala Jam"
+            }
+        }
+    }
+
+    fun joinJamSession(roomCode: String) {
+        val repo = communityRepository
+        if (activeUserId == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para unirte a una sala Jam."
+            return
+        }
+        val normalized = roomCode.trim().uppercase()
+        viewModelScope.launch {
+            repo.fetchJamSession(normalized)
+                .onSuccess { session ->
+                    if (session == null || !session.active) {
+                        _syncMessage.value = "No se encontró ninguna sala Jam activa con el código $normalized"
+                    } else {
+                        startObservingJam(session.roomCode)
+                        _syncMessage.value = "Conectado al Jam de ${session.hostName} (${session.roomCode})"
+                    }
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo unir a la sala Jam"
+                }
+        }
+    }
+
+    private fun startObservingJam(roomCode: String) {
+        val repo = communityRepository ?: return
+        jamObserverJob?.cancel()
+        jamObserverJob = viewModelScope.launch {
+            repo.observeJamSession(roomCode)
+                .catch { err ->
+                    _syncMessage.value = "Jam desconectado: ${err.localizedMessage ?: "sin red"}"
+                }
+                .collect { session ->
+                    if (session == null || !session.active) {
+                        val wasInRoom = _catalogSnapshot.value.activeJam != null
+                        _catalogSnapshot.update { it.copy(activeJam = null) }
+                        if (wasInRoom) {
+                            _syncMessage.value = "La sala Jam ha finalizado"
+                        }
+                        jamObserverJob?.cancel()
+                        return@collect
+                    }
+                    _catalogSnapshot.update { it.copy(activeJam = session) }
+                    if (session.hostUserId != activeUserId) {
+                        applyRemoteJamPlayback(session)
+                    }
+                }
+        }
+    }
+
+    private fun applyRemoteJamPlayback(session: JamSession) {
+        val allById = uiState.value.tracks.associateBy { it.id }
+        val targetTrack = allById[session.currentTrackId] ?: return
+        val pb = playbackState.value
+        val jamQueue = session.queueTrackIds.mapNotNull { allById[it] }.ifEmpty { uiState.value.cloudTracks }
+
+        if (pb.currentTrack?.id != targetTrack.id) {
+            playerController.playTrack(targetTrack, jamQueue)
+            if (session.positionMs > 2500L) {
+                playerController.seekTo(session.positionMs)
+            }
+            if (!session.playing) {
+                playerController.pause()
+            }
+        } else {
+            if (session.playing && !pb.isPlaying) {
+                playerController.resumeOrPlay()
+            } else if (!session.playing && pb.isPlaying) {
+                playerController.pause()
+            }
+            if (abs(pb.positionMs - session.positionMs) > 3500L) {
+                playerController.seekTo(session.positionMs)
+            }
+        }
+    }
+
+    fun addTrackToActiveJam(track: TrackUiModel) {
+        val jam = _catalogSnapshot.value.activeJam ?: return
+        val repo = communityRepository ?: return
+        viewModelScope.launch {
+            repo.addTrackToJamQueue(jam.roomCode, track.id)
+                .onSuccess {
+                    _syncMessage.value = "\"${track.title}\" añadida a la cola del Jam"
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo añadir al Jam"
+                }
+        }
+    }
+
+    fun leaveJamSession() {
+        val jam = _catalogSnapshot.value.activeJam
+        val uid = activeUserId
+        val repo = communityRepository
+        jamObserverJob?.cancel()
+        jamObserverJob = null
+        _catalogSnapshot.update { it.copy(activeJam = null) }
+        if (jam != null && uid != null && jam.hostUserId == uid && repo != null) {
+            viewModelScope.launch {
+                repo.closeJamSession(jam.roomCode)
+            }
+            _syncMessage.value = "Sala Jam ${jam.roomCode} finalizada"
+        } else if (jam != null) {
+            _syncMessage.value = "Saliste de la sala Jam"
+        }
+    }
+
+    fun sharePlaylistWithCode(
+        playlist: UserPlaylist,
+        collaborative: Boolean,
+        onCodeReady: (String?) -> Unit
+    ) {
+        val uid = activeUserId
+        val repo = communityRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para compartir playlists."
+            onCodeReady(null)
+            return
+        }
+        viewModelScope.launch {
+            repo.publishSharedPlaylist(uid, activeDisplayName, playlist, collaborative)
+                .onSuccess { shared ->
+                    _syncMessage.value = "Código generado: ${shared.shareCode}"
+                    onCodeReady(shared.shareCode)
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo compartir la playlist"
+                    onCodeReady(null)
+                }
+        }
+    }
+
+    fun joinSharedPlaylistByCode(shareCode: String, onDone: (Boolean) -> Unit = {}) {
+        val uid = activeUserId
+        val repo = communityRepository
+        val syncRepo = cloudSyncRepository
+        if (uid == null || repo == null || syncRepo == null) {
+            _syncMessage.value = "Inicia sesión con Google para importar playlists compartidas."
+            onDone(false)
+            return
+        }
+        val normalized = shareCode.trim().uppercase()
+        viewModelScope.launch {
+            repo.fetchSharedPlaylist(normalized)
+                .onSuccess { shared ->
+                    if (shared == null) {
+                        _syncMessage.value = "No existe ninguna playlist con el código $normalized"
+                        onDone(false)
+                    } else {
+                        val importedDesc = buildString {
+                            if (shared.description.isNotBlank()) append("${shared.description} • ")
+                            append("De ${shared.ownerName} (Código $normalized)")
+                        }.take(200)
+                        syncRepo.createPlaylist(
+                            userId = uid,
+                            name = shared.name,
+                            description = importedDesc,
+                            initialTrackIds = shared.trackIds
+                        ).onSuccess {
+                            _syncMessage.value = "Playlist \"${shared.name}\" importada con ${shared.trackIds.size} canciones"
+                            onDone(true)
+                        }.onFailure { err ->
+                            _syncMessage.value = err.localizedMessage ?: "No se pudo guardar la playlist importada"
+                            onDone(false)
+                        }
+                    }
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo buscar el código"
+                    onDone(false)
+                }
+        }
+    }
+
+    // --- v1.9: Crossfade, Artist Follows, Releases Inbox, Timed Comments ---
+    fun setCrossfadeSeconds(seconds: Int) {
+        val clamped = seconds.coerceIn(0, 12)
+        playerController.setCrossfadeSeconds(clamped)
+        viewModelScope.launch {
+            themeRepo.setCrossfadeSeconds(clamped)
+        }
+    }
+
+    fun markReleasesInboxSeen() {
+        val newestMs = uiState.value.latestReleaseAlbum?.createdAt?.toDate()?.time
+            ?: System.currentTimeMillis()
+        val markMs = maxOf(newestMs, System.currentTimeMillis())
+        viewModelScope.launch {
+            themeRepo.setLastSeenReleaseMs(markMs)
+        }
+    }
+
+    fun toggleFollowArtist(artist: CatalogArtist) {
+        val uid = activeUserId
+        val repo = communityRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para seguir artistas."
+            return
+        }
+        val currentlyFollowing = _catalogSnapshot.value.followedArtistIds.contains(artist.id)
+        viewModelScope.launch {
+            repo.toggleFollowArtist(uid, artist.id, artist.name, currentlyFollowing)
+                .onSuccess { nowFollowing ->
+                    _syncMessage.value = if (nowFollowing) {
+                        "Ahora sigues a ${artist.name}"
+                    } else {
+                        "Dejaste de seguir a ${artist.name}"
+                    }
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo actualizar el seguimiento"
+                }
+        }
+    }
+
+    fun addTrackComment(
+        track: TrackUiModel,
+        timestampMs: Long,
+        text: String,
+        onDone: (Boolean) -> Unit = {}
+    ) {
+        val uid = activeUserId
+        val repo = communityRepository
+        if (uid == null || repo == null) {
+            _syncMessage.value = "Inicia sesión con Google para comentar en canciones."
+            onDone(false)
+            return
+        }
+        viewModelScope.launch {
+            repo.addTrackComment(
+                userId = uid,
+                authorName = activeDisplayName,
+                trackId = track.id,
+                trackTitle = track.title,
+                timestampMs = timestampMs,
+                text = text
+            ).onSuccess {
+                _syncMessage.value = "Comentario publicado en el segundo ${formatMsShort(timestampMs)}"
+                onDone(true)
+            }.onFailure { err ->
+                _syncMessage.value = err.localizedMessage ?: "No se pudo publicar el comentario"
+                onDone(false)
+            }
+        }
+    }
+
+    fun deleteTrackComment(commentId: String) {
+        val repo = communityRepository ?: return
+        viewModelScope.launch {
+            repo.deleteTrackComment(commentId)
+                .onSuccess {
+                    _syncMessage.value = "Comentario eliminado"
+                }
+                .onFailure { err ->
+                    _syncMessage.value = err.localizedMessage ?: "No se pudo eliminar el comentario"
+                }
+        }
+    }
+
+    private fun formatMsShort(ms: Long): String {
+        val totalSec = (ms / 1000L).coerceAtLeast(0L)
+        return "${totalSec / 60}:${(totalSec % 60).toString().padStart(2, '0')}"
     }
 
     fun clearMessage() {

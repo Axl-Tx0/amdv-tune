@@ -35,6 +35,31 @@
             android:name=".data.MusicPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <receiver
+            android:name=".widget.AmdvMusicWidgetProvider"
+            android:exported="true"
+            android:label="@string/brand_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.widget.ACTION_PLAY_PAUSE" />
+                <action android:name="com.example.widget.ACTION_PREV" />
+                <action android:name="com.example.widget.ACTION_NEXT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/amdv_widget_info" />
+        </receiver>
     </application>
 
 </manifest>

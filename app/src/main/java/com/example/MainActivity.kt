@@ -81,19 +81,34 @@ import com.example.auth.signOutUser
 import com.example.data.AppDatabase
 import com.example.data.CatalogRepository
 import com.example.data.CloudSyncRepository
+import com.example.data.CommunityAndJamRepository
 import com.example.data.MusicPlaybackService
 import com.example.data.PlaybackControllerHolder
 import com.example.data.ThemePreferencesRepository
 import com.example.model.CatalogAlbum
 import com.example.model.CatalogArtist
 import com.example.model.TrackUiModel
+import com.example.model.UserPlaylist
+import com.example.ui.components.AddToPlaylistSheet
 import com.example.ui.components.AdminCatalogSheet
 import com.example.ui.components.AlbumDetailScreen
+import com.example.ui.components.AmdvReplayOverlay
 import com.example.ui.components.AppUpdateAvailableDialog
 import com.example.ui.components.ArtistDetailScreen
+import com.example.ui.components.AudioEffectsAndTimerSheet
+import com.example.ui.components.CreateOrRenamePlaylistDialog
+import com.example.ui.components.DrivingModeOverlay
 import com.example.ui.components.FullScreenPlayerOverlay
+import com.example.ui.components.JamSessionSheet
+import com.example.ui.components.JoinPlaylistByCodeDialog
 import com.example.ui.components.LyricsDetailSheet
 import com.example.ui.components.MiniPlayerBanner
+import com.example.ui.components.PlaylistDetailScreen
+import com.example.ui.components.QueueBottomSheet
+import com.example.ui.components.ReleasesInboxSheet
+import com.example.ui.components.SharePlaylistCodeDialog
+import com.example.ui.components.TrackCommentsSheet
+import com.example.ui.components.formatSleepCountdown
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.ProfileScreen
@@ -188,6 +203,21 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
     var lyricsSheetTrack by remember { mutableStateOf<TrackUiModel?>(null) }
     var selectedArtist by remember { mutableStateOf<CatalogArtist?>(null) }
     var selectedAlbum by remember { mutableStateOf<CatalogAlbum?>(null) }
+    var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+    var addToPlaylistTrack by remember { mutableStateOf<TrackUiModel?>(null) }
+    var showCreatePlaylistDialog by remember { mutableStateOf(false) }
+    var renamingPlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
+    var showQueueSheet by remember { mutableStateOf(false) }
+    var audioFxInitialTab by remember { mutableStateOf<Int?>(null) }
+    var showJamSheet by remember { mutableStateOf(false) }
+    var showReplayOverlay by remember { mutableStateOf(false) }
+    var showReleasesInbox by remember { mutableStateOf(false) }
+    var showDrivingMode by remember { mutableStateOf(false) }
+    var showTrackComments by remember { mutableStateOf(false) }
+    var sharingPlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
+    var generatedPlaylistCode by remember { mutableStateOf<String?>(null) }
+    var isPublishingShareCode by remember { mutableStateOf(false) }
+    var showJoinPlaylistDialog by remember { mutableStateOf(false) }
     var showAdminCatalogSheet by remember { mutableStateOf(false) }
     var dismissedReleaseCode by remember { mutableStateOf<Long?>(null) }
     var forceShowUpdateDialog by remember { mutableStateOf(false) }
@@ -268,7 +298,8 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 val db = FirebaseFirestore.getInstance(dbId)
                 val repo = CloudSyncRepository(db, Firebase.auth)
                 val catalogRepo = CatalogRepository(context.applicationContext, db, Firebase.auth)
-                viewModel.attachAuthenticatedCloud(uid, displayName, isAdmin, repo, catalogRepo)
+                val communityRepo = CommunityAndJamRepository(db, Firebase.auth)
+                viewModel.attachAuthenticatedCloud(uid, displayName, isAdmin, repo, catalogRepo, communityRepo)
                 onDispose {
                     viewModel.detachAuthenticatedCloud()
                 }
@@ -279,6 +310,7 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
             showAdminCatalogSheet = false
             selectedArtist = null
             selectedAlbum = null
+            selectedPlaylistId = null
         }
     }
 
@@ -489,14 +521,38 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                     HomeScreen(
                                         tracks = uiState.tracks,
                                         offlineTracks = uiState.offlineTracks,
+                                        recentTracks = uiState.recentTracks,
+                                        playlists = uiState.playlists,
                                         artists = uiState.artists,
                                         albums = uiState.albums,
+                                        latestReleaseAlbum = uiState.latestReleaseAlbum,
+                                        dailyMixTracks = uiState.dailyMixTracks,
+                                        trendingTracks = uiState.trendingTracks,
+                                        activeJam = uiState.activeJam,
                                         playbackState = playbackState,
                                         isAdmin = isAdmin,
+                                        hasUnreadReleases = uiState.hasUnreadReleases,
                                         onSearchBarClick = { navigateTab(ROUTE_SEARCH) },
+                                        onOpenReleasesInbox = {
+                                            showReleasesInbox = true
+                                            viewModel.markReleasesInboxSeen()
+                                        },
                                         onTrackClick = ::playAndExpand,
+                                        onPlaylistClick = { selectedPlaylistId = it.id },
                                         onArtistClick = { selectedArtist = it },
                                         onAlbumClick = { selectedAlbum = it },
+                                        onPlayAlbum = { album ->
+                                            ensureNotificationPermissionIfNeeded()
+                                            viewModel.playAlbumTracks(album)
+                                            isFullScreenPlayerOpen = true
+                                        },
+                                        onPlayDailyMix = {
+                                            ensureNotificationPermissionIfNeeded()
+                                            viewModel.playDailyMix()
+                                            isFullScreenPlayerOpen = true
+                                        },
+                                        onRegenerateDailyMix = viewModel::regenerateDailyMix,
+                                        onOpenJamSheet = { showJamSheet = true },
                                         onOpenAdminPanel = { showAdminCatalogSheet = true }
                                     )
                                 }
@@ -516,13 +572,19 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                             lyricsSheetTrack = it
                                         },
                                         onDownloadTrack = viewModel::downloadTrackOffline,
-                                        onRemoveDownload = viewModel::removeOfflineDownload
+                                        onRemoveDownload = viewModel::removeOfflineDownload,
+                                        onAddToPlaylist = { addToPlaylistTrack = it },
+                                        onPlayNextInQueue = viewModel::playNextInQueue,
+                                        onAddToQueueEnd = viewModel::addToQueueEnd
                                     )
                                 }
                                 composable(ROUTE_LIBRARY) {
                                     LibraryScreen(
                                         deviceTracks = uiState.deviceTracks,
                                         offlineTracks = uiState.offlineTracks,
+                                        allTracks = uiState.tracks,
+                                        playlists = uiState.playlists,
+                                        isSignedIn = currentUser != null,
                                         playbackState = playbackState,
                                         isAdmin = isAdmin,
                                         hasAudioPermission = hasAudioPermission,
@@ -530,6 +592,9 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                         onOpenAdminPanel = { showAdminCatalogSheet = true },
                                         onSyncDeviceMusicClick = ::triggerDeviceMusicSync,
                                         onGoToSearchClick = { navigateTab(ROUTE_SEARCH) },
+                                        onPlaylistClick = { selectedPlaylistId = it.id },
+                                        onCreatePlaylistClick = { showCreatePlaylistDialog = true },
+                                        onJoinPlaylistByCodeClick = { showJoinPlaylistDialog = true },
                                         onTrackClick = ::playQueueAndExpand,
                                         onToggleFavorite = viewModel::toggleFavorite,
                                         onDeleteTrack = viewModel::deleteTrack,
@@ -537,10 +602,18 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                             lyricsSheetTrack = it
                                         },
                                         onDownloadTrack = viewModel::downloadTrackOffline,
-                                        onRemoveDownload = viewModel::removeOfflineDownload
+                                        onRemoveDownload = viewModel::removeOfflineDownload,
+                                        onAddToPlaylist = { addToPlaylistTrack = it },
+                                        onPlayNextInQueue = viewModel::playNextInQueue,
+                                        onAddToQueueEnd = viewModel::addToQueueEnd
                                     )
                                 }
                                 composable(ROUTE_PROFILE) {
+                                    val sleepTimerLabel = when {
+                                        playbackState.sleepAfterCurrentTrack -> "Fin pista"
+                                        playbackState.sleepTimerRemainingMs != null -> formatSleepCountdown(playbackState.sleepTimerRemainingMs ?: 0L)
+                                        else -> null
+                                    }
                                     ProfileScreen(
                                         currentUser = currentUser,
                                         isAdmin = isAdmin,
@@ -551,10 +624,19 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                         repeatOneEnabled = playbackState.repeatOneEnabled,
                                         autoContinueEnabled = playbackState.autoContinueEnabled,
                                         muteOnNotificationsEnabled = playbackState.muteOnNotificationsEnabled,
+                                        isEqualizerEnabled = playbackState.audioEffects.enabled,
+                                        crossfadeSeconds = playbackState.crossfadeSeconds,
+                                        hasActiveTrack = playbackState.currentTrack != null,
+                                        activeSleepTimerLabel = sleepTimerLabel,
                                         latestRelease = uiState.latestRelease,
                                         favoriteCount = uiState.favoriteCount,
                                         offlineCount = uiState.offlineCount,
                                         totalSongsCount = uiState.tracks.size,
+                                        topTracks = uiState.topTracks,
+                                        topArtists = uiState.topArtists,
+                                        totalPlaysCount = uiState.totalPlaysCount,
+                                        totalListeningMinutes = uiState.totalListeningMinutes,
+                                        listeningStreakDays = uiState.listeningStreakDays,
                                         onSignInClick = {
                                             authErrorMessage = null
                                             isAuthLoading = true
@@ -582,6 +664,17 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                                         onToggleRepeat = viewModel::toggleRepeat,
                                         onToggleAutoContinue = viewModel::toggleAutoContinue,
                                         onToggleMuteOnNotifications = viewModel::toggleMuteOnNotifications,
+                                        onOpenEqualizer = { audioFxInitialTab = 0 },
+                                        onOpenSleepTimer = { audioFxInitialTab = 1 },
+                                        onOpenDrivingMode = {
+                                            if (playbackState.currentTrack != null) {
+                                                showDrivingMode = true
+                                            } else {
+                                                viewModel.showMessage("Reproduce una canción primero para activar el Modo Conducción.")
+                                            }
+                                        },
+                                        onOpenReplay = { showReplayOverlay = true },
+                                        onTrackClick = ::playAndExpand,
                                         onOpenUpdateDialog = { forceShowUpdateDialog = true }
                                     )
                                 }
@@ -594,12 +687,17 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
             val currentArtist = selectedArtist
             if (currentArtist != null) {
                 val liveArtist = uiState.artists.firstOrNull { it.id == currentArtist.id } ?: currentArtist
+                val artistFollowerCount = uiState.artistStats[liveArtist.id]?.followerCount ?: 0L
+                val isFollowingArtist = uiState.followedArtistIds.contains(liveArtist.id)
                 ArtistDetailScreen(
                     artist = liveArtist,
                     allArtists = uiState.artists,
                     albums = uiState.albums,
                     tracks = uiState.cloudTracks,
                     playbackState = playbackState,
+                    isFollowing = isFollowingArtist,
+                    followerCount = artistFollowerCount,
+                    onToggleFollow = { viewModel.toggleFollowArtist(liveArtist) },
                     onDismiss = { selectedArtist = null },
                     onSelectRelatedArtist = { nextArtist ->
                         selectedAlbum = null
@@ -621,7 +719,10 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                         if (playbackState.currentTrack != null) {
                             isFullScreenPlayerOpen = true
                         }
-                    }
+                    },
+                    onAddToPlaylist = { addToPlaylistTrack = it },
+                    onPlayNextInQueue = viewModel::playNextInQueue,
+                    onAddToQueueEnd = viewModel::addToQueueEnd
                 )
             }
 
@@ -652,6 +753,48 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                         if (playbackState.currentTrack != null) {
                             isFullScreenPlayerOpen = true
                         }
+                    },
+                    onAddToPlaylist = { addToPlaylistTrack = it },
+                    onPlayNextInQueue = viewModel::playNextInQueue,
+                    onAddToQueueEnd = viewModel::addToQueueEnd
+                )
+            }
+
+            val openPlaylist = selectedPlaylistId?.let { pid ->
+                uiState.playlists.firstOrNull { it.id == pid }
+            }
+            if (openPlaylist != null) {
+                PlaylistDetailScreen(
+                    playlist = openPlaylist,
+                    allTracks = uiState.tracks,
+                    playbackState = playbackState,
+                    onDismiss = { selectedPlaylistId = null },
+                    onRenameClick = { renamingPlaylist = openPlaylist },
+                    onDeleteClick = {
+                        viewModel.deletePlaylist(openPlaylist.id) {
+                            selectedPlaylistId = null
+                        }
+                    },
+                    onDownloadPlaylist = { viewModel.downloadPlaylistOffline(openPlaylist) },
+                    onTrackClick = ::playQueueAndExpand,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                    onRemoveFromPlaylist = { trackId ->
+                        viewModel.removeTrackFromPlaylist(openPlaylist, trackId)
+                    },
+                    onDownloadTrack = viewModel::downloadTrackOffline,
+                    onRemoveDownload = viewModel::removeOfflineDownload,
+                    onPlayNextInQueue = viewModel::playNextInQueue,
+                    onAddToQueueEnd = viewModel::addToQueueEnd,
+                    onPlayPause = viewModel::togglePlayPause,
+                    onNext = viewModel::playNext,
+                    onExpandPlayer = {
+                        if (playbackState.currentTrack != null) {
+                            isFullScreenPlayerOpen = true
+                        }
+                    },
+                    onShareClick = {
+                        generatedPlaylistCode = null
+                        sharingPlaylist = openPlaylist
                     }
                 )
             }
@@ -661,6 +804,8 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                     artists = uiState.artists,
                     albums = uiState.albums,
                     cloudTracks = uiState.cloudTracks,
+                    rawCatalogTracks = uiState.rawCatalogTracks,
+                    moderationComments = uiState.moderationComments,
                     latestRelease = uiState.latestRelease,
                     folderImportState = folderImportState,
                     isUploading = uiState.isCatalogUploading,
@@ -676,7 +821,11 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                     onDeleteArtist = viewModel::adminDeleteCatalogArtist,
                     onDeleteAlbum = viewModel::adminDeleteCatalogAlbum,
                     onDeleteTrack = viewModel::adminDeleteCatalogTrack,
-                    onPublishAppUpdate = viewModel::adminPublishAppUpdate
+                    onUpdateArtist = viewModel::adminUpdateArtist,
+                    onUpdateAlbum = viewModel::adminUpdateAlbum,
+                    onUpdateTrack = viewModel::adminUpdateTrack,
+                    onPublishAppUpdate = viewModel::adminPublishAppUpdate,
+                    onDeleteComment = viewModel::deleteTrackComment
                 )
             }
 
@@ -702,6 +851,11 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 lyricsStatusMessage = if (playingTrackId != null && lyricsLookupState.statusTrackId == playingTrackId) {
                     lyricsLookupState.statusMessage
                 } else null,
+                lyricsOffsetMs = playingTrackId?.let { uiState.lyricsOffsetsMs[it] } ?: 0L,
+                communityStats = playingTrackId?.let { uiState.communityStats[it] },
+                userReaction = playingTrackId?.let { uiState.userReactions[it] },
+                activeJam = uiState.activeJam,
+                trackComments = uiState.currentTrackComments,
                 onCollapse = { isFullScreenPlayerOpen = false },
                 onPlayPause = viewModel::togglePlayPause,
                 onNext = viewModel::playNext,
@@ -718,8 +872,209 @@ fun AmdvTuneApp(openPlayerSignal: Int = 0) {
                 },
                 onRequestAutoLyrics = { targetTrack, force ->
                     viewModel.fetchLyricsFromLrcLib(targetTrack, forceRefresh = force)
-                }
+                },
+                onAdjustLyricsOffset = viewModel::adjustLyricsOffset,
+                onResetLyricsOffset = viewModel::resetLyricsOffset,
+                onToggleReaction = viewModel::toggleTrackReaction,
+                onOpenJamSheet = { showJamSheet = true },
+                onOpenComments = { showTrackComments = true },
+                onOpenDrivingMode = { showDrivingMode = true },
+                onOpenArtist = { targetTrack ->
+                    isFullScreenPlayerOpen = false
+                    openArtistForTrack(targetTrack)
+                },
+                onAddToPlaylist = { addToPlaylistTrack = it },
+                onOpenQueue = { showQueueSheet = true },
+                onOpenEqualizer = { audioFxInitialTab = 0 },
+                onOpenSleepTimer = { audioFxInitialTab = 1 }
             )
+
+            DrivingModeOverlay(
+                visible = showDrivingMode,
+                playbackState = playbackState,
+                onPlayPause = viewModel::togglePlayPause,
+                onNext = viewModel::playNext,
+                onPrevious = viewModel::playPrevious,
+                onToggleFavorite = viewModel::toggleFavorite,
+                onClose = { showDrivingMode = false }
+            )
+
+            AmdvReplayOverlay(
+                visible = showReplayOverlay,
+                userName = currentUser?.displayName ?: currentUser?.email ?: "AMDV-TUNE",
+                totalPlaysCount = uiState.totalPlaysCount,
+                totalListeningMinutes = uiState.totalListeningMinutes,
+                listeningStreakDays = uiState.listeningStreakDays,
+                favoriteCount = uiState.favoriteCount,
+                offlineCount = uiState.offlineCount,
+                playlistCount = uiState.playlists.size,
+                topTracks = uiState.topTracks,
+                topArtists = uiState.topArtists,
+                onPlayTrack = ::playAndExpand,
+                onDismiss = { showReplayOverlay = false }
+            )
+
+            if (showJamSheet) {
+                JamSessionSheet(
+                    activeJam = uiState.activeJam,
+                    isHost = uiState.isJamHost,
+                    isSignedIn = currentUser != null,
+                    allTracks = uiState.tracks,
+                    currentTrack = playbackState.currentTrack,
+                    onCreateRoom = viewModel::createJamSession,
+                    onJoinRoom = viewModel::joinJamSession,
+                    onLeaveOrCloseRoom = viewModel::leaveJamSession,
+                    onAddTrackToJam = viewModel::addTrackToActiveJam,
+                    onPlayJamTrack = { tr ->
+                        viewModel.playTrack(tr)
+                    },
+                    onDismiss = { showJamSheet = false }
+                )
+            }
+
+            val plToShare = sharingPlaylist
+            if (plToShare != null) {
+                SharePlaylistCodeDialog(
+                    playlist = plToShare,
+                    generatedCode = generatedPlaylistCode,
+                    isPublishing = isPublishingShareCode,
+                    onPublish = { collaborative ->
+                        isPublishingShareCode = true
+                        viewModel.sharePlaylistWithCode(plToShare, collaborative) { code ->
+                            isPublishingShareCode = false
+                            if (code != null) {
+                                generatedPlaylistCode = code
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        sharingPlaylist = null
+                        generatedPlaylistCode = null
+                    }
+                )
+            }
+
+            if (showJoinPlaylistDialog) {
+                JoinPlaylistByCodeDialog(
+                    onDismiss = { showJoinPlaylistDialog = false },
+                    onJoin = { code ->
+                        showJoinPlaylistDialog = false
+                        viewModel.joinSharedPlaylistByCode(code)
+                    }
+                )
+            }
+
+            if (showQueueSheet) {
+                QueueBottomSheet(
+                    playbackState = playbackState,
+                    onDismiss = { showQueueSheet = false },
+                    onPlayIndex = { idx -> viewModel.playQueueIndex(idx) },
+                    onMoveItem = { from, to -> viewModel.moveQueueItem(from, to) },
+                    onRemoveItem = { idx -> viewModel.removeFromQueue(idx) }
+                )
+            }
+
+            val fxTab = audioFxInitialTab
+            if (fxTab != null) {
+                AudioEffectsAndTimerSheet(
+                    playbackState = playbackState,
+                    initialTab = fxTab,
+                    onDismiss = { audioFxInitialTab = null },
+                    onToggleEqualizer = viewModel::setEqualizerEnabled,
+                    onSelectPreset = viewModel::selectEqualizerPreset,
+                    onChangeBandLevel = viewModel::setEqualizerBandLevel,
+                    onChangeBassBoost = viewModel::setBassBoostStrength,
+                    onChangeCrossfadeSeconds = viewModel::setCrossfadeSeconds,
+                    onSetSleepTimerMinutes = viewModel::setSleepTimerMinutes,
+                    onSetSleepAfterTrack = viewModel::setSleepAfterCurrentTrack,
+                    onCancelSleepTimer = viewModel::cancelSleepTimer
+                )
+            }
+
+            if (showReleasesInbox) {
+                ReleasesInboxSheet(
+                    recentAlbums = uiState.recentReleaseAlbums,
+                    followedArtistIds = uiState.followedArtistIds,
+                    onDismiss = { showReleasesInbox = false },
+                    onOpenAlbum = { album ->
+                        showReleasesInbox = false
+                        selectedAlbum = album
+                    },
+                    onPlayAlbum = { album ->
+                        showReleasesInbox = false
+                        ensureNotificationPermissionIfNeeded()
+                        viewModel.playAlbumTracks(album)
+                        isFullScreenPlayerOpen = true
+                    }
+                )
+            }
+
+            val commentsTrack = playbackState.currentTrack
+            if (showTrackComments && commentsTrack != null) {
+                TrackCommentsSheet(
+                    track = commentsTrack,
+                    currentPositionMs = playbackState.positionMs,
+                    comments = uiState.currentTrackComments,
+                    currentUserId = currentUser?.uid,
+                    isAdmin = isAdmin,
+                    onDismiss = { showTrackComments = false },
+                    onSeekTo = { targetMs ->
+                        viewModel.seekTo(targetMs)
+                    },
+                    onAddComment = { tsMs, text, onDone ->
+                        viewModel.addTrackComment(commentsTrack, tsMs, text, onDone)
+                    },
+                    onDeleteComment = viewModel::deleteTrackComment
+                )
+            }
+
+            val targetPlaylistTrack = addToPlaylistTrack
+            if (targetPlaylistTrack != null) {
+                AddToPlaylistSheet(
+                    track = targetPlaylistTrack,
+                    playlists = uiState.playlists,
+                    allTracks = uiState.tracks,
+                    isSignedIn = currentUser != null,
+                    onDismiss = { addToPlaylistTrack = null },
+                    onToggleTrackInPlaylist = { pl ->
+                        viewModel.toggleTrackInPlaylist(pl, targetPlaylistTrack)
+                    },
+                    onCreateNewPlaylist = { name, desc ->
+                        viewModel.createPlaylist(
+                            name = name,
+                            description = desc,
+                            initialTrackId = targetPlaylistTrack.id
+                        )
+                    }
+                )
+            }
+
+            if (showCreatePlaylistDialog) {
+                CreateOrRenamePlaylistDialog(
+                    title = "Nueva playlist",
+                    confirmLabel = "Crear",
+                    onDismiss = { showCreatePlaylistDialog = false },
+                    onConfirm = { name, desc ->
+                        showCreatePlaylistDialog = false
+                        viewModel.createPlaylist(name = name, description = desc)
+                    }
+                )
+            }
+
+            val playlistToRename = renamingPlaylist
+            if (playlistToRename != null) {
+                CreateOrRenamePlaylistDialog(
+                    title = "Editar playlist",
+                    initialName = playlistToRename.name,
+                    initialDescription = playlistToRename.description,
+                    confirmLabel = "Guardar",
+                    onDismiss = { renamingPlaylist = null },
+                    onConfirm = { name, desc ->
+                        renamingPlaylist = null
+                        viewModel.renamePlaylist(playlistToRename.id, name, desc)
+                    }
+                )
+            }
 
             val activeLyricsTrack = lyricsSheetTrack
             if (activeLyricsTrack != null) {

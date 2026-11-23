@@ -74,6 +74,41 @@
       },
       "required": ["userId", "title", "artist", "durationSec", "favorite", "sourceType", "createdAt", "updatedAt"]
     },
+    "UserPlaylist": {
+      "title": "UserPlaylist",
+      "description": "Custom user playlist storing ordered track IDs synced to the cloud.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the playlist owner."
+        },
+        "name": {
+          "type": "string",
+          "description": "Playlist name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional short description of the playlist."
+        },
+        "trackIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of track IDs contained in the playlist."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on mutation."
+        }
+      },
+      "required": ["userId", "name", "description", "trackIds", "createdAt", "updatedAt"]
+    },
     "CatalogArtist": {
       "title": "CatalogArtist",
       "description": "Shared cloud catalog artist managed by the verified admin and readable by signed-in users when published.",
@@ -260,6 +295,253 @@
         }
       },
       "required": ["userId", "latestVersionCode", "latestVersionName", "downloadUrl", "releaseNotes", "mandatory", "updatedAt"]
+    },
+    "CommunityTrackStats": {
+      "title": "CommunityTrackStats",
+      "description": "Aggregated community play counts and quick emoji reactions per catalog track.",
+      "type": "object",
+      "properties": {
+        "trackId": {
+          "type": "string",
+          "description": "Track identifier matching the document ID."
+        },
+        "playCount": {
+          "type": "integer",
+          "description": "Total community plays for this track."
+        },
+        "fireCount": {
+          "type": "integer",
+          "description": "Total fire reactions."
+        },
+        "heartCount": {
+          "type": "integer",
+          "description": "Total heart reactions."
+        },
+        "headphonesCount": {
+          "type": "integer",
+          "description": "Total headphones reactions."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["trackId", "playCount", "fireCount", "heartCount", "headphonesCount", "updatedAt"]
+    },
+    "UserTrackReaction": {
+      "title": "UserTrackReaction",
+      "description": "Per-user toggle state for fire, heart, and headphones reactions on a track.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the reacting user."
+        },
+        "trackId": {
+          "type": "string",
+          "description": "Track identifier matching the document ID."
+        },
+        "fire": {
+          "type": "boolean",
+          "description": "Whether the user reacted with fire."
+        },
+        "heart": {
+          "type": "boolean",
+          "description": "Whether the user reacted with heart."
+        },
+        "headphones": {
+          "type": "boolean",
+          "description": "Whether the user reacted with headphones."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "trackId", "fire", "heart", "headphones", "updatedAt"]
+    },
+    "JamSession": {
+      "title": "JamSession",
+      "description": "Real-time shared listening room synchronized by a 6-character code.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "6-character uppercase room code matching the document ID."
+        },
+        "hostUserId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the room host."
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Display name of the room host."
+        },
+        "currentTrackId": {
+          "type": "string",
+          "description": "Currently playing track ID or empty string."
+        },
+        "playing": {
+          "type": "boolean",
+          "description": "Whether playback is currently playing."
+        },
+        "positionMs": {
+          "type": "integer",
+          "description": "Last synced playback position in milliseconds."
+        },
+        "queueTrackIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Shared Jam queue of upcoming track IDs."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the Jam room is still active."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on last playback or queue update."
+        }
+      },
+      "required": ["roomCode", "hostUserId", "hostName", "currentTrackId", "playing", "positionMs", "queueTrackIds", "active", "createdAt", "updatedAt"]
+    },
+    "SharedPlaylist": {
+      "title": "SharedPlaylist",
+      "description": "Shareable or collaborative playlist accessible by a 6-character code.",
+      "type": "object",
+      "properties": {
+        "shareCode": {
+          "type": "string",
+          "description": "6-character uppercase share code matching the document ID."
+        },
+        "ownerUserId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the playlist owner."
+        },
+        "ownerName": {
+          "type": "string",
+          "description": "Display name of the playlist owner."
+        },
+        "name": {
+          "type": "string",
+          "description": "Playlist name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional playlist description."
+        },
+        "trackIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of track IDs in the shared playlist."
+        },
+        "collaborative": {
+          "type": "boolean",
+          "description": "Whether other signed-in users with the code can add tracks."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on mutation."
+        }
+      },
+      "required": ["shareCode", "ownerUserId", "ownerName", "name", "description", "trackIds", "collaborative", "createdAt", "updatedAt"]
+    },
+    "UserArtistFollow": {
+      "title": "UserArtistFollow",
+      "description": "Per-user record indicating that the user follows a catalog artist.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the follower."
+        },
+        "artistId": {
+          "type": "string",
+          "description": "CatalogArtist document ID matching the follow doc ID."
+        },
+        "artistName": {
+          "type": "string",
+          "description": "Denormalized artist display name."
+        },
+        "followedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user followed the artist."
+        }
+      },
+      "required": ["userId", "artistId", "artistName", "followedAt"]
+    },
+    "ArtistStats": {
+      "title": "ArtistStats",
+      "description": "Aggregated follower count per catalog artist.",
+      "type": "object",
+      "properties": {
+        "artistId": {
+          "type": "string",
+          "description": "CatalogArtist document ID matching this document ID."
+        },
+        "followerCount": {
+          "type": "integer",
+          "description": "Total community followers for this artist."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["artistId", "followerCount", "updatedAt"]
+    },
+    "TrackComment": {
+      "title": "TrackComment",
+      "description": "Timestamped community comment pinned to a specific playback second of a track.",
+      "type": "object",
+      "properties": {
+        "trackId": {
+          "type": "string",
+          "description": "Track identifier the comment belongs to."
+        },
+        "trackTitle": {
+          "type": "string",
+          "description": "Denormalized track title for moderation display."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the comment author."
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the comment author."
+        },
+        "timestampMs": {
+          "type": "integer",
+          "description": "Playback timestamp in milliseconds where the comment is anchored."
+        },
+        "text": {
+          "type": "string",
+          "description": "Short comment body (1..220 characters)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["trackId", "trackTitle", "userId", "authorName", "timestampMs", "text", "createdAt"]
     }
   },
   "firestore": {
@@ -270,6 +552,18 @@
     "/users/{userId}/tracks/{trackId}": {
       "schema": { "$ref": "#/entities/UserTrack" },
       "description": "User-scoped library tracks and favorite state."
+    },
+    "/users/{userId}/playlists/{playlistId}": {
+      "schema": { "$ref": "#/entities/UserPlaylist" },
+      "description": "User-scoped custom playlists with ordered track IDs."
+    },
+    "/users/{userId}/reactions/{trackId}": {
+      "schema": { "$ref": "#/entities/UserTrackReaction" },
+      "description": "User-scoped quick reactions per track."
+    },
+    "/users/{userId}/followed_artists/{artistId}": {
+      "schema": { "$ref": "#/entities/UserArtistFollow" },
+      "description": "User-scoped followed artists."
     },
     "/catalog_artists/{artistId}": {
       "schema": { "$ref": "#/entities/CatalogArtist" },
@@ -286,6 +580,26 @@
     "/app_config/{configId}": {
       "schema": { "$ref": "#/entities/AppReleaseConfig" },
       "description": "App release configuration document (release) for GitHub Releases update alerts."
+    },
+    "/community_stats/{trackId}": {
+      "schema": { "$ref": "#/entities/CommunityTrackStats" },
+      "description": "Community play counts and quick reactions powering Trending in AMDV-TUNE."
+    },
+    "/artist_stats/{artistId}": {
+      "schema": { "$ref": "#/entities/ArtistStats" },
+      "description": "Community follower counts per catalog artist."
+    },
+    "/track_comments/{commentId}": {
+      "schema": { "$ref": "#/entities/TrackComment" },
+      "description": "Timestamped community comments on songs, moderated by author or Admin."
+    },
+    "/jam_sessions/{roomCode}": {
+      "schema": { "$ref": "#/entities/JamSession" },
+      "description": "Live synchronized listening rooms joined via 6-character code."
+    },
+    "/shared_playlists/{shareCode}": {
+      "schema": { "$ref": "#/entities/SharedPlaylist" },
+      "description": "Shareable and collaborative playlists accessed via 6-character code."
     }
   }
 }

@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.amdvtune.qkvwmz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.4"
+    versionCode = 10
+    versionName = "1.9"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

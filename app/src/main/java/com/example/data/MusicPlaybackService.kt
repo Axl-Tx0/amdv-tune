@@ -33,6 +33,7 @@ import com.example.EXTRA_OPEN_FULL_SCREEN_PLAYER
 import com.example.MainActivity
 import com.example.R
 import com.example.model.TrackUiModel
+import com.example.widget.AmdvMusicWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -222,6 +223,12 @@ class MusicPlaybackService : Service() {
             lastNotificationPlaying = activeForeground
             lastNotificationDuration = durationMs
             postNotification(track, activeForeground, cachedArtworkBitmap)
+            AmdvMusicWidgetProvider.updateAllWidgets(
+                context = applicationContext,
+                track = track,
+                isPlaying = state.isPlaying,
+                artwork = cachedArtworkBitmap
+            )
         }
     }
 
@@ -278,6 +285,12 @@ class MusicPlaybackService : Service() {
                     val dur = current.durationMs.coerceAtLeast(activeTrack.durationSec * 1000L)
                     updateSessionMetadata(activeTrack, dur, bitmap)
                     postNotification(activeTrack, current.isPlaying, bitmap)
+                    AmdvMusicWidgetProvider.updateAllWidgets(
+                        context = applicationContext,
+                        track = activeTrack,
+                        isPlaying = current.isPlaying,
+                        artwork = bitmap
+                    )
                 }
             }
         }

@@ -500,9 +500,10 @@ fun FolderUploadTabContent(
                             .clip(RoundedCornerShape(12.dp))
                     )
                 } else {
-                    val previewCoverKey = when {
-                        preview.previewCoverPath.isNotBlank() -> preview.previewCoverPath
-                        else -> "MONO_VIOLET_${editableAlbum.firstOrNull()?.uppercaseChar() ?: 'A'}"
+                    val previewCoverKey = if (preview.previewCoverPath.isNotBlank()) {
+                        preview.previewCoverPath
+                    } else {
+                        "MONO_VIOLET_${editableAlbum.firstOrNull()?.uppercaseChar() ?: 'A'}"
                     }
                     TrackCoverArt(
                         coverKey = previewCoverKey,
@@ -520,7 +521,7 @@ fun FolderUploadTabContent(
                     )
                     Text(
                         text = if (customCoverUri != null) {
-                            "Portada del álbum seleccionada ✓"
+                            "Portada personalizada seleccionada ✓"
                         } else if (preview.previewCoverPath.isNotBlank()) {
                             "Portada detectada automáticamente ✓"
                         } else {
@@ -547,7 +548,7 @@ fun FolderUploadTabContent(
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Filled.Image, contentDescription = null)
+                Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(if (customCoverUri != null) "Cambiar portada del álbum ✓" else "Elegir portada del álbum (opcional)")
             }
